@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchbase"
+version = "0.0.0"
+authors = [
+    { name = "Sohrab Ferdowsi", email = "sohrab.ferdowsi@gmail.com" },
+]
+description = "To base your pytorch-based projects on."
+requires-python = ">=3.10"
+
+dependencies = [
+    "torch",
+    "numpy",
+    "python_dateutil",
+    "scikit-learn",
+    "tensorboard",
+    "torchinfo"
+]
+
+[project.optional-dependencies]
+interactive = [
+    "jupyter",
+    "jupyterlab",
+    "ipykernel",
+    "matplotlib"
+]
+
+[tool.setuptools.packages.find]
+include = ["torchbase*"]
