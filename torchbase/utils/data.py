@@ -1,6 +1,10 @@
-import random
+from datasets import Dataset
+
 from typing import Tuple, Iterable, List, Any, Dict, Type, get_args
 import types
+from dataclasses import dataclass
+
+import random
 
 
 def random_split_iterable(iterable_input: Iterable[Any], portions: Tuple[float, ...]) -> Tuple[List[Any], ...]:
@@ -139,3 +143,28 @@ class TypedDictIterable(TypedDict):
     @data.setter
     def data(self, value: Dict[str, Any]):
         self._data = self.__call__(value)
+
+
+@dataclass
+class ValidationDatasetsDict:
+    datasets: Tuple[Dataset, ...]
+    only_for_demo: Tuple[bool, ...]
+    names: Tuple[str, ...]
+
+    def is_valid(self) -> bool:
+        if not isinstance(self.datasets, tuple):
+            return False
+        if any(not isinstance(dataset, Dataset) for dataset in self.datasets):
+            return False
+        if not isinstance(self.only_for_demo, tuple):
+            return False
+        if any(not isinstance(question, bool) for question in self.only_for_demo):
+            return False
+        if not isinstance(self.names, tuple):
+            return False
+        if any(not isinstance(name, str) for name in self.names):
+            return False
+        if len(self.datasets) != len(self.only_for_demo) != len(self.names):
+            return False
+
+        return True

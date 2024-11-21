@@ -1,11 +1,16 @@
 from torchbase.utils.data import random_split_iterable, split_to_train_valid_test
 from torchbase.utils.data import TypedDict, TypedDictIterable
+from torchbase.utils.data import ValidationDatasetsDict
 
 import unittest
-from io import StringIO
+
+from datasets import Dataset
 
 from enum import Enum
 from dataclasses import dataclass
+
+from io import StringIO
+import random
 
 
 class RandomSplittingUnitTest(unittest.TestCase):
@@ -236,6 +241,42 @@ class TypedDictIterableUnitTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             self.typed_dict_iterable.data = input_dict
+
+
+class ValidationDatasetsDictUnitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.dataset_valid_1 = Dataset.from_dict({"data": [random.randint(0, 100) for _ in range(10)]})
+        cls.dataset_valid_2 = Dataset.from_dict({"data": [random.randint(0, 100) for _ in range(10)]})
+        cls.dataset_valid_3 = Dataset.from_dict({"data": [random.randint(0, 100) for _ in range(10)]})
+
+    def test_correct_input(self):
+        datasets = (self.dataset_valid_1, self.dataset_valid_2, self.dataset_valid_3)
+        only_for_demo = (True, False, True)
+        names = ("train_without_augmentation", "valid_with_augmentation", "valid_without_augmentation")
+        config = ValidationDatasetsDict(datasets=datasets, only_for_demo=only_for_demo, names=names)
+        self.assertTrue(config.is_valid())
+
+    def test_incorrect_type_datasets(self):
+        incorrect_datasets = (123, self.dataset_valid_2, self.dataset_valid_3)
+        only_for_demo = (True, False, True)
+        names = ("train", "valid_1", "valid_2")
+        config = ValidationDatasetsDict(datasets=incorrect_datasets, only_for_demo=only_for_demo, names=names)
+        self.assertFalse(config.is_valid())
+
+    def test_incorrect_type_only_for_demo(self):
+        datasets = (self.dataset_valid_1, self.dataset_valid_2)
+        incorrect_flags = ("yes", "no")
+        names = ("train", "valid")
+        config = ValidationDatasetsDict(datasets=datasets, only_for_demo=incorrect_flags, names=names)
+        self.assertFalse(config.is_valid())
+
+    def test_mismatched_length(self):
+        datasets = (self.dataset_valid_1, self.dataset_valid_2)
+        flags = (True,)
+        names = ("train", "valid_1", "valid_2")
+        config = ValidationDatasetsDict(datasets=datasets, only_for_demo=flags, names=names)
+        self.assertFalse(config.is_valid())
 
 
 if __name__ == "__main__":
