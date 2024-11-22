@@ -29,6 +29,8 @@ class TrainingBaseSession(ABC):
 
         self.device = torch.device(self.config_session.device_name)
 
+        self.dataset_train, self.datasets_valid_dict = self._init_datasets()
+
     @staticmethod
     def setup_configs(config: Dict) -> Tuple[TrainingConfigSessionDict, Dict, Dict, Dict]:
         if not isinstance(config, dict):
@@ -78,3 +80,22 @@ class TrainingBaseSession(ABC):
 
             return run_dir_tag
 
+    @abstractmethod
+    def init_datasets(self) -> Tuple[Dataset, ValidationDatasetsDict]:
+        pass
+
+    def _init_datasets(self) -> Tuple[Dataset, ValidationDatasetsDict]:
+        # TODO: Save random seeds for reproducibility (e.g., if train-valid splitting is done here).
+
+        dataset_train, datasets_valid_dict = self.init_datasets()
+
+        if not isinstance(dataset_train, Dataset):
+            raise ValueError("`dataset_train` should be an instance of `datasets.Dataset`.")
+        if not isinstance(datasets_valid_dict, ValidationDatasetsDict):
+            raise ValueError("`datasets_valid_dict` must be an instance of `ValidationDatasetsDict`.")
+        if not datasets_valid_dict.is_valid():
+            raise ValueError("Failed to create a valid `datasets_valid_dict`, an instance of `ValidationDatasetsDict`.")
+
+        # TODO: Convert from Huggingface to `torch.utils.data.Dataset` instances.
+
+        return dataset_train, datasets_valid_dict
