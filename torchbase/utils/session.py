@@ -8,7 +8,7 @@ def get_current_time_tag() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-def generate_log_dir_tag(tag_postfix: str | None = None) -> str:
+def generate_log_dir_tag(tag_postfix: None | str = None) -> str:
     current_datetime = get_current_time_tag()
     hostname = socket.gethostname()
     tag = "{}_{}".format(current_datetime, hostname)
