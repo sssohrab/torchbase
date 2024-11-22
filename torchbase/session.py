@@ -3,6 +3,8 @@ from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionD
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset as TorchDataset
 
 from datasets import Dataset
 
@@ -27,9 +29,12 @@ class TrainingBaseSession(ABC):
                                                           source_run_dir_tag,
                                                           tag_postfix)
 
+        # TODO: SummaryWriter init (or reload).
+        # TODO: state_dict init (or reload) and saving (or loading) all random generator seeds.
         self.device = torch.device(self.config_session.device_name)
 
         self.dataset_train, self.datasets_valid_dict = self._init_datasets()
+        self.dataloader_train, self.dataloader_valid_dict = self.init_dataloaders()
 
     @staticmethod
     def setup_configs(config: Dict) -> Tuple[TrainingConfigSessionDict, Dict, Dict, Dict]:
@@ -99,3 +104,23 @@ class TrainingBaseSession(ABC):
         # TODO: Convert from Huggingface to `torch.utils.data.Dataset` instances.
 
         return dataset_train, datasets_valid_dict
+
+    def init_dataloaders(self) -> Tuple[DataLoader, Dict[str, DataLoader]]:
+        # TODO: Decide on torch vs. huggingface dataloader.
+        # TODO: The dataloader for the streaming case.
+        # TODO: Dataloading with partial shuffling when there are shards of data.
+        dataloader_train = DataLoader(self.dataset_train, batch_size=self.config_session.mini_batch_size, shuffle=True,
+                                      num_workers=self.config_session.dataloader_num_workers,
+                                      collate_fn=self.dataloader_collate_function)
+        dataloader_valid_dict = {
+            self.datasets_valid_dict.names[ind]: DataLoader(self.datasets_valid_dict.datasets[ind],
+                                                            batch_size=self.config_session.mini_batch_size,
+                                                            shuffle=True,
+                                                            num_workers=self.config_session.dataloader_num_workers,
+                                                            collate_fn=self.dataloader_collate_function) for ind in
+            range(len(self.datasets_valid_dict.names))}
+
+        return dataloader_train, dataloader_valid_dict
+
+    def dataloader_collate_function(self, batch: List[Any]) -> Dict[str, List[Any] | torch.Tensor]:
+        return torch.utils.data.default_collate(batch)
