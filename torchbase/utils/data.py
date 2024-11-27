@@ -7,7 +7,17 @@ from dataclasses import dataclass
 import random
 
 
-def random_split_iterable(iterable_input: Iterable[Any], portions: Tuple[float, ...]) -> Tuple[List[Any], ...]:
+def _iterable_to_list(iterable: Iterable[Any]) -> List[Any]:
+    if hasattr(iterable, 'read'):
+        return [line.strip() for line in iterable]
+    try:
+        return list(iterable)
+    except TypeError as e:
+        raise TypeError(f"Unsupported iterable type: {type(iterable)}. Error: {e}")
+
+
+def _split_iterable(iterable_input: Iterable[Any], portions: Tuple[float, ...], shuffle: bool = True) -> (
+        Tuple)[List[Any], ...]:
     if not isinstance(iterable_input, Iterable) or isinstance(iterable_input, str):
         raise TypeError("`iterable_input` must be an iterable.")
 
@@ -24,12 +34,10 @@ def random_split_iterable(iterable_input: Iterable[Any], portions: Tuple[float, 
 
     portions = [_p / sum_portions for _p in portions]
 
-    if hasattr(iterable_input, 'read'):
-        list_input = [line.strip() for line in iterable_input]
-    else:
-        list_input = list(iterable_input)
+    list_input = _iterable_to_list(iterable_input)
 
-    random.shuffle(list_input)
+    if shuffle:
+        random.shuffle(list_input)
 
     num_all = len(list_input)
     split_indices = [int(sum(portions[:i + 1]) * num_all) for i in range(len(portions))]
@@ -43,12 +51,47 @@ def random_split_iterable(iterable_input: Iterable[Any], portions: Tuple[float, 
     return tuple(splits)
 
 
-def split_to_train_valid_test(iterable_input: Iterable, portions: Tuple[float, float, float] = (0.75, 0.15, 0.15)) -> \
-        Tuple[
-            List, List, List]:
+def split_iterables(
+        input_: Iterable[Any] | Dict[str, Iterable[Any]],
+        portions: Tuple[float, ...], shuffle: bool = True
+) -> Tuple[List[Any], ...] | Tuple[Dict[str, List[Any]], ...]:
+    if isinstance(input_, dict):
+        if not all(isinstance(v, Iterable) for v in input_.values()):
+            raise TypeError("All values in the dictionary must be iterables.")
+
+        input_ = {k: _iterable_to_list(v) for k, v in input_.items()}
+
+        lengths = {len(list(v)) for v in input_.values()}
+        if len(lengths) > 1:
+            raise ValueError("All iterables in the dictionary must have the same length.")
+
+        indices = list(range(lengths.pop()))
+        if shuffle:
+            random.shuffle(indices)
+
+        keys = list(input_.keys())
+        splits = [{} for _ in portions]
+        for k in keys:
+            _splits = _split_iterable(
+                [input_[k][i] for i in indices],
+                portions,
+                shuffle=False
+            )
+            for i, part in enumerate(_splits):
+                splits[i][k] = part
+
+        return tuple(splits)
+    else:
+
+        return _split_iterable(input_, portions, shuffle=shuffle)
+
+
+def split_to_train_valid_test(input_: Iterable[Any] | Dict[str, Iterable[Any]],
+                              portions: Tuple[float, float, float] = (0.75, 0.15, 0.15)) -> \
+        Tuple[List, List, List] | Tuple[Dict[str, List[Any]], Dict[str, List[Any]], Dict[str, List[Any]]]:
     if len(portions) != 3:
         raise ValueError("`portions` should be a tuple of size 3 specifying train-valid-test portions, respectively.")
-    train, valid, test = random_split_iterable(iterable_input, portions=portions)
+    train, valid, test = split_iterables(input_, portions=portions)
 
     return train, valid, test
 

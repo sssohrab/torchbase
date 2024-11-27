@@ -1,4 +1,4 @@
-from torchbase.utils.data import random_split_iterable, split_to_train_valid_test
+from torchbase.utils.data import split_iterables, split_to_train_valid_test
 from torchbase.utils.data import TypedDict, TypedDictIterable
 from torchbase.utils.data import ValidationDatasetsDict
 
@@ -13,40 +13,69 @@ from io import StringIO
 import random
 
 
-class RandomSplittingUnitTest(unittest.TestCase):
+class SplittingTests(unittest.TestCase):
 
     def setUp(self):
-        self.data_list = ["sample{}".format(i + 1) for i in range(10)]
+        self.data_list = ["sample{}".format(i) for i in range(10)]
         self.data_file = StringIO("\n".join(self.data_list) + "\n")
+        self.dictionary_of_iterables = {
+            "data": self.data_list,
+            "files": self.data_file,
+            "indices": tuple([i for i in range(10)]),
+            "IDs": ["ID-{}".format(i) for i in range(10)]
+        }
 
     def test_list_input(self):
-        split_1, split_2, split_3 = random_split_iterable(self.data_list, (0.6, 0.2, 0.2))
+        split_1, split_2, split_3 = split_iterables(self.data_list, (0.6, 0.2, 0.2))
 
         self.assertEqual(len(split_1), 6)
         self.assertEqual(len(split_2), 2)
         self.assertEqual(len(split_3), 2)
         self.assertEqual(set(split_1 + split_2 + split_3), set(self.data_list))
 
+    def test_list_input_without_shuffle(self):
+        split_1, split_2, split_3 = split_iterables(self.data_list, (0.6, 0.2, 0.2), shuffle=False)
+
+        self.assertEqual(len(split_1), 6)
+        self.assertEqual(len(split_2), 2)
+        self.assertEqual(len(split_3), 2)
+        self.assertEqual(split_1 + split_2 + split_3, self.data_list)
+
     def test_file_input(self):
-        split_1, split_2 = random_split_iterable(self.data_file, (1.0, 4.0))
+        split_1, split_2 = split_iterables(self.data_file, (1.0, 4.0))
 
         self.assertEqual(len(split_1), 2)
         self.assertEqual(len(split_2), 8)
         self.assertEqual(set(split_1 + split_2), set(self.data_list))
 
+    def test_dictionary_input(self):
+        split_1, split_2 = split_iterables(self.dictionary_of_iterables, (0.8, 0.2))
+
+        self.assertEqual(sorted(list(split_1.keys())), sorted(list(self.dictionary_of_iterables.keys())))
+
+        for v in split_1.values():
+            self.assertEqual(len(v), 8)
+
+        for i in range(8):
+            for v in split_1.values():
+                self.assertTrue(str(v[i]).endswith(str(split_1["indices"][i])))
+
+        for v in split_2.values():
+            self.assertEqual(len(v), 2)
+
     def test_invalid_portions(self):
         with self.assertRaises(ValueError):
-            random_split_iterable(self.data_list, (0.6, 0.2, -0.2))
+            split_iterables(self.data_list, (0.6, 0.2, -0.2))
 
     def test_empty_input(self):
         empty_data = []
-        split_1, split_2 = random_split_iterable(empty_data, (2.0, 3.0))
+        split_1, split_2 = split_iterables(empty_data, (2.0, 3.0))
 
         self.assertEqual(len(split_1), 0)
         self.assertEqual(len(split_2), 0)
 
     def test_split_to_train_valid_test_valid(self):
-        train, valid, test = random_split_iterable(self.data_file, (0.7, 0.15, 0.15))
+        train, valid, test = split_iterables(self.data_file, (0.7, 0.15, 0.15))
         self.assertEqual(len(train), 7)
         self.assertEqual(len(valid), 1)
         self.assertEqual(len(test), 2)
@@ -55,6 +84,15 @@ class RandomSplittingUnitTest(unittest.TestCase):
     def test_split_to_train_valid_test_invalid(self):
         with self.assertRaises(ValueError):
             train, valid = split_to_train_valid_test(self.data_file, (0.7, 0.3))
+
+    def test_split_to_train_valid_test_for_dictionary(self):
+        train_dict, valid_dict, test_dict = split_iterables(self.dictionary_of_iterables, (0.7, 0.15, 0.15))
+        for v in train_dict.values():
+            self.assertEqual(len(v), 7)
+        for v in valid_dict.values():
+            self.assertEqual(len(v), 1)
+        for v in test_dict.values():
+            self.assertEqual(len(v), 2)
 
 
 class ExampleCategoricalDataTypeGender(Enum):
