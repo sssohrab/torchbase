@@ -1,6 +1,7 @@
 from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
 
+import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
@@ -12,7 +13,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Any, Callable
 import inspect
 import os
-import json
 import random
 
 
@@ -24,17 +24,19 @@ class TrainingBaseSession(ABC):
                  tag_postfix: None | str = None):
 
         self.config_session, self.config_data, self.config_metrics, self.config_network = self.setup_configs(config)
-        self.run_dir_tag = self.setup_run_dir_for_logging(runs_parent_dir,
-                                                          create_run_dir_afresh,
-                                                          source_run_dir_tag,
-                                                          tag_postfix)
+        self.run_dir = self.setup_run_dir_for_logging(runs_parent_dir,
+                                                      create_run_dir_afresh,
+                                                      source_run_dir_tag,
+                                                      tag_postfix)
 
-        # TODO: SummaryWriter init (or reload).
-        # TODO: state_dict init (or reload) and saving (or loading) all random generator seeds.
+        self.configure_states_dir_and_randomness_sources(self.run_dir, create_run_dir_afresh)
+
         self.device = torch.device(self.config_session.device_name)
 
         self.dataset_train, self.datasets_valid_dict = self._init_datasets()
         self.dataloader_train, self.dataloader_valid_dict = self.init_dataloaders()
+
+        self.writer = SummaryWriter(log_dir=self.run_dir)
 
     @staticmethod
     def setup_configs(config: Dict) -> Tuple[TrainingConfigSessionDict, Dict, Dict, Dict]:
@@ -67,10 +69,10 @@ class TrainingBaseSession(ABC):
                     raise TypeError("You specified to post-fix the generated run-tag, "
                                     "but the passed value is not of type string.")
 
-                run_dir_tag = generate_log_dir_tag(tag_postfix)
-                os.makedirs(os.path.join(runs_parent_dir, run_dir_tag), exist_ok=False)
+            run_dir_tag = generate_log_dir_tag(tag_postfix)
+            os.makedirs(os.path.join(runs_parent_dir, run_dir_tag), exist_ok=False)
 
-                return run_dir_tag
+            return os.path.join(runs_parent_dir, run_dir_tag)
 
         else:
             if not isinstance(source_run_dir_tag, str):
@@ -83,7 +85,30 @@ class TrainingBaseSession(ABC):
 
             run_dir_tag = source_run_dir_tag
 
-            return run_dir_tag
+            return os.path.join(runs_parent_dir, run_dir_tag)
+
+    @staticmethod
+    def configure_states_dir_and_randomness_sources(run_dir: str, create_run_dir_afresh: bool) -> None:
+        states_dir = os.path.join(run_dir, "states")
+
+        if create_run_dir_afresh:
+            os.makedirs(states_dir, exist_ok=False)
+            torch.save({"torch_rng_state": torch.get_rng_state(),
+                        "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+                        "numpy_rng_state": np.random.get_state(),
+                        "random_rng_state": random.getstate()}, os.path.join(states_dir, 'rng_states.pth'))
+        else:
+            if not os.path.exists(states_dir):
+                raise FileNotFoundError(
+                    "Requested to restart from a previous run, but its states_dir to reload from is missing.")
+
+            # TODO: The warning regarding weight_only option. Instead of pickling, just serialize them with json.
+            rng_states = torch.load(os.path.join(states_dir, "rng_states.pth"))
+            torch.set_rng_state(rng_states["torch_rng_state"])
+            if rng_states["cuda_rng_state"] is not None:
+                torch.cuda.set_rng_state(rng_states["cuda_rng_state"])
+            np.random.set_state(rng_states["numpy_rng_state"])
+            random.setstate(rng_states["random_rng_state"])
 
     @abstractmethod
     def init_datasets(self) -> Tuple[Dataset, ValidationDatasetsDict]:
