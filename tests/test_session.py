@@ -10,6 +10,7 @@ import os
 import random
 import shutil
 import time
+import json
 
 TEST_STORAGE_DIR = os.path.join(os.path.split(os.path.abspath(__file__))[0], "storage")
 os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
@@ -29,7 +30,7 @@ class ExampleTrainingSessionClass(TrainingBaseSession):
             },
             "data": {
                 "raw": {
-                    "inputs": range(20),
+                    "inputs": list(range(20)),
                     "labels": [i % 2 for i in range(20)],
                 },
                 "split_portions": (0.8, 0.2)
@@ -98,6 +99,10 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         self.assertIsNotNone(self.session_fresh_run_fresh_network)
         self.assertIsInstance(self.session_fresh_run_fresh_network, TrainingBaseSession)
 
+    def test_instantiate_session_with_existing_run(self):
+        self.assertIsNotNone(self.session_existing_run)
+        self.assertIsInstance(self.session_existing_run, TrainingBaseSession)
+
     def test_datasets_random_access(self):
         datasets = ([self.session_fresh_run_fresh_network.dataset_train]
                     + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
@@ -110,6 +115,27 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         dataset_initial = self.session_fresh_run_fresh_network.dataset_train
         dataset_replicated = self.session_existing_run.dataset_train
         self.assertEqual(dataset_initial.data, dataset_replicated.data)
+
+    def test_existing_run_dir_but_no_run_tag_specified(self):
+        with self.assertRaises(ValueError):
+            ExampleTrainingSessionClass(config=ExampleTrainingSessionClass.get_config(),
+                                        runs_parent_dir=TEST_STORAGE_DIR,
+                                        create_run_dir_afresh=False,
+                                        source_run_dir_tag="Some-non-existing-tag")
+
+        # TODO: When networks loading is implemented, to test with a wrong source-dir.
+
+    def test_config_saved_in_run_dir(self):
+        run_dir = self.session_fresh_run_fresh_network.run_dir
+        run_dir_content = os.listdir(run_dir)
+        self.assertIn("config.json", run_dir_content)
+        with open(os.path.join(run_dir, "config.json"), "r") as file:
+            saved_config = json.load(file)
+
+        self.assertEqual(saved_config["session"], self.session_fresh_run_fresh_network.config_session.to_dict())
+        self.assertEqual(saved_config["data"]["raw"], self.session_fresh_run_fresh_network.config_data["raw"])
+        self.assertEqual(saved_config["network"], self.session_fresh_run_fresh_network.config_network)
+        self.assertEqual(saved_config["metrics"], self.session_fresh_run_fresh_network.config_metrics)
 
 
 if __name__ == "__main__":

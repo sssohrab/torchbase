@@ -14,6 +14,7 @@ from typing import Dict, List, Tuple, Any, Callable
 import inspect
 import os
 import random
+import json
 
 
 class TrainingBaseSession(ABC):
@@ -30,6 +31,7 @@ class TrainingBaseSession(ABC):
                                                       tag_postfix)
 
         self.configure_states_dir_and_randomness_sources(self.run_dir, create_run_dir_afresh)
+        self.save_config_to_run_dir(create_run_dir_afresh)
 
         self.device = torch.device(self.config_session.device_name)
 
@@ -109,6 +111,21 @@ class TrainingBaseSession(ABC):
                 torch.cuda.set_rng_state(rng_states["cuda_rng_state"])
             np.random.set_state(rng_states["numpy_rng_state"])
             random.setstate(rng_states["random_rng_state"])
+
+    def save_config_to_run_dir(self, create_run_dir_afresh: bool) -> None:
+        config = {
+            "session": self.config_session.to_dict(),
+            "data": self.config_data,
+            "metrics": self.config_metrics,
+            "network": self.config_network
+        }
+        if create_run_dir_afresh:
+            _postfix = ""
+        else:
+            _postfix = "_{}".format(generate_log_dir_tag(None))
+
+        with open(os.path.join(self.run_dir, "config{}.json".format(_postfix)), "w") as file:
+            json.dump(config, file, indent=2)
 
     @abstractmethod
     def init_datasets(self) -> Tuple[Dataset, ValidationDatasetsDict]:
