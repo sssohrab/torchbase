@@ -1,3 +1,5 @@
+import torch
+
 from torchbase.session import TrainingBaseSession
 from torchbase.utils.data import ValidationDatasetsDict, split_iterables
 
@@ -36,7 +38,10 @@ class ExampleTrainingSessionClass(TrainingBaseSession):
                 "split_portions": (0.8, 0.2)
             },
             "metrics": {},
-            "network": {}
+            "network": {
+                "architecture": "SomeExampleNet",
+                "num_ch": 2
+            }
         }
 
         return config
@@ -64,6 +69,23 @@ class ExampleTrainingSessionClass(TrainingBaseSession):
                     only_for_demo=(True, False, False),
                     names=("train-no-aug", "valid-with-aug", "valid-no-aug")
                 ))
+
+    def init_network(self) -> torch.nn.Module:
+        class SomeExampleNet(torch.nn.Module):
+            def __init__(self, num_ch: int):
+                super().__init__()
+                self.conv1 = torch.nn.Conv2d(1, num_ch, 3, padding=1)
+                self.conv2 = torch.nn.Conv2d(num_ch, 1, 3, padding=1)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                x = self.conv1(x)
+                x = torch.nn.ReLU()(x)
+                x = self.conv2(x)
+
+                return x
+        network = SomeExampleNet(num_ch=self.config_network["num_ch"])
+
+        return network
 
 
 class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
@@ -136,6 +158,12 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         self.assertEqual(saved_config["data"]["raw"], self.session_fresh_run_fresh_network.config_data["raw"])
         self.assertEqual(saved_config["network"], self.session_fresh_run_fresh_network.config_network)
         self.assertEqual(saved_config["metrics"], self.session_fresh_run_fresh_network.config_metrics)
+
+    def test_networks_init_and_declared_architecture_mismatch(self):
+        wrong_config = ExampleTrainingSessionClass.get_config()
+        wrong_config["network"]["architecture"] = "SomeMistakenlyHeldNetworkName"
+        with self.assertRaises(TypeError):
+            ExampleTrainingSessionClass(config=wrong_config, runs_parent_dir=TEST_STORAGE_DIR)
 
 
 if __name__ == "__main__":

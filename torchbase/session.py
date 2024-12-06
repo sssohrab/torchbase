@@ -38,6 +38,8 @@ class TrainingBaseSession(ABC):
         self.dataset_train, self.datasets_valid_dict = self._init_datasets()
         self.dataloader_train, self.dataloader_valid_dict = self.init_dataloaders()
 
+        self.network = self._init_network()
+
         self.writer = SummaryWriter(log_dir=self.run_dir)
 
     @staticmethod
@@ -45,8 +47,12 @@ class TrainingBaseSession(ABC):
         if not isinstance(config, dict):
             raise TypeError("Pass a python dictionary as session `config`.")
         expected_keys = ["session", "data", "network", "metrics"]
-        if not all(key in config for key in expected_keys):
+        if not all(key in config.keys() for key in expected_keys):
             raise ValueError("`config` should specify all of these fields {}".format(expected_keys))
+
+        if "architecture" not in config["network"].keys():
+            raise ValueError(
+                "The 'network' `config` should specify the class name of the network's 'architecture' as a field.")
 
         return TrainingConfigSessionDict(config["session"]), config["data"], config["metrics"], config["network"]
 
@@ -166,3 +172,23 @@ class TrainingBaseSession(ABC):
 
     def dataloader_collate_function(self, batch: List[Any]) -> Dict[str, List[Any] | torch.Tensor]:
         return torch.utils.data.default_collate(batch)
+
+    @abstractmethod
+    def init_network(self) -> torch.nn.Module:
+        pass
+
+    def _init_network(self) -> torch.nn.Module:
+
+        network = self.init_network()
+        if not isinstance(network, torch.nn.Module):
+            raise TypeError("Failed to instantiate a valid `network`, an instance of `torch.nn.Module`.")
+
+        expected_network_class_name = self.config_network["architecture"]
+        if network.__class__.__name__ != expected_network_class_name:
+            raise TypeError(
+                "The loaded network is an instance of `{}`, whereas the network config was assuming"
+                " an instance of `{}` to be instantiated. Check the implementation of the abstract method"
+                "`init_network()` for errors or modify your network config accordingly.".format(
+                    network.__class__.__name__, expected_network_class_name))
+
+        return network
