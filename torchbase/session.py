@@ -1,5 +1,6 @@
-from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
+from torchbase.utils.data import ValidationDatasetsDict
+from torchbase.utils.networks import load_network_from_state_dict_to_device
 
 import numpy as np
 import torch
@@ -33,12 +34,17 @@ class TrainingBaseSession(ABC):
         self.configure_states_dir_and_randomness_sources(self.run_dir, create_run_dir_afresh)
         self.save_config_to_run_dir(create_run_dir_afresh)
 
-        self.device = torch.device(self.config_session.device_name)
+        self.device = torch.device(self.config_session.device_name)  # TODO
 
         self.dataset_train, self.datasets_valid_dict = self._init_datasets()
         self.dataloader_train, self.dataloader_valid_dict = self.init_dataloaders()
 
         self.network = self._init_network()
+        self.saved_network_name: str = "network.pth"
+
+        self.optimizer = self.init_optimizer()
+
+        self.load_network_and_optimizer_states_if_relevant(source_run_dir_tag, create_run_dir_afresh)
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
 
@@ -192,3 +198,33 @@ class TrainingBaseSession(ABC):
                     network.__class__.__name__, expected_network_class_name))
 
         return network
+
+    def init_optimizer(self) -> torch.optim:
+        optimizer = torch.optim.Adam(self.network.parameters(),
+                                     lr=self.config_session.learning_rate,
+                                     weight_decay=self.config_session.weight_decay)
+
+        return optimizer
+
+    def save_network_and_optimizer_states(self) -> None:
+        torch.save(self.network.state_dict(), os.path.join(self.run_dir, "states", self.saved_network_name))
+        torch.save(self.optimizer.state_dict(), os.path.join(self.run_dir, "states", "optimizer.pth"))
+
+    def load_network_and_optimizer_states_if_relevant(self, source_run_dir_tag: None | str,
+                                                      create_run_dir_afresh: bool) -> None:
+        if source_run_dir_tag is None:
+            if not create_run_dir_afresh:
+                raise ValueError("This cannot happen anyway.")
+            return
+
+        source_states_dir_path = os.path.join(os.path.dirname(self.run_dir), source_run_dir_tag, "states")
+        self.network = load_network_from_state_dict_to_device(
+            self.network,
+            state_dict_path=os.path.join(source_states_dir_path, self.saved_network_name),
+            device=self.device)
+
+        if create_run_dir_afresh:
+            return
+        # Optimizer states loaded only for fresh run, but network states loaded anyway (if source run is specified).
+        self.optimizer.load_state_dict(
+            torch.load(os.path.join(source_states_dir_path, "optimizer.pth"), weights_only=True))
