@@ -1,5 +1,6 @@
-from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
+from torchbase.utils.data import ValidationDatasetsDict
+from torchbase.utils.networks import load_network_from_state_dict_to_device
 
 import numpy as np
 import torch
@@ -15,6 +16,10 @@ import inspect
 import os
 import random
 import json
+
+SAVED_NETWORK_NAME = "network.pth"
+SAVED_OPTIMIZER_NAME = "optimizer.pth"
+SAVED_RNG_NAME = "rng_states.pth"
 
 
 class TrainingBaseSession(ABC):
@@ -33,10 +38,16 @@ class TrainingBaseSession(ABC):
         self.configure_states_dir_and_randomness_sources(self.run_dir, create_run_dir_afresh)
         self.save_config_to_run_dir(create_run_dir_afresh)
 
-        self.device = torch.device(self.config_session.device_name)
+        self.device = torch.device(self.config_session.device_name)  # TODO
 
         self.dataset_train, self.datasets_valid_dict = self._init_datasets()
         self.dataloader_train, self.dataloader_valid_dict = self.init_dataloaders()
+
+        self.network = self._init_network()
+
+        self.optimizer = self.init_optimizer()
+
+        self.load_network_and_optimizer_states_if_relevant(source_run_dir_tag, create_run_dir_afresh)
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
 
@@ -45,8 +56,12 @@ class TrainingBaseSession(ABC):
         if not isinstance(config, dict):
             raise TypeError("Pass a python dictionary as session `config`.")
         expected_keys = ["session", "data", "network", "metrics"]
-        if not all(key in config for key in expected_keys):
+        if not all(key in config.keys() for key in expected_keys):
             raise ValueError("`config` should specify all of these fields {}".format(expected_keys))
+
+        if "architecture" not in config["network"].keys():
+            raise ValueError(
+                "The 'network' `config` should specify the class name of the network's 'architecture' as a field.")
 
         return TrainingConfigSessionDict(config["session"]), config["data"], config["metrics"], config["network"]
 
@@ -90,6 +105,24 @@ class TrainingBaseSession(ABC):
             return os.path.join(runs_parent_dir, run_dir_tag)
 
     @staticmethod
+    def check_source_states_dir_is_valid(source_states_dir: str):
+        if not os.path.exists(source_states_dir):
+            raise FileNotFoundError(
+                "Requested to restart from the existing previous run `{}`, "
+                "but its states_dir to reload from is missing.".format(os.path.split(source_states_dir)[-2]))
+        if not os.path.exists(os.path.join(source_states_dir, SAVED_RNG_NAME)):
+            raise FileNotFoundError("The randomness states file does not exist under the source `{}`. "
+                                    "This is not a valid source".format(source_states_dir))
+
+        if not os.path.exists(os.path.join(source_states_dir, SAVED_NETWORK_NAME)):
+            raise FileNotFoundError("The saved network's `states_dict` does not exist under the source `{}`. "
+                                    "This is not a valid source".format(source_states_dir))
+
+        if not os.path.exists(os.path.join(source_states_dir, SAVED_OPTIMIZER_NAME)):
+            raise FileNotFoundError("The optimizer `states_dict` file does not exist in the source `{}`. "
+                                    "This is not a valid source".format(source_states_dir))
+
+    @staticmethod
     def configure_states_dir_and_randomness_sources(run_dir: str, create_run_dir_afresh: bool) -> None:
         states_dir = os.path.join(run_dir, "states")
 
@@ -98,14 +131,12 @@ class TrainingBaseSession(ABC):
             torch.save({"torch_rng_state": torch.get_rng_state(),
                         "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
                         "numpy_rng_state": np.random.get_state(),
-                        "random_rng_state": random.getstate()}, os.path.join(states_dir, 'rng_states.pth'))
+                        "random_rng_state": random.getstate()}, os.path.join(states_dir, SAVED_RNG_NAME))
         else:
-            if not os.path.exists(states_dir):
-                raise FileNotFoundError(
-                    "Requested to restart from a previous run, but its states_dir to reload from is missing.")
-
+            TrainingBaseSession.check_source_states_dir_is_valid(states_dir)
+            # TODO: Take these static methods out of the class definition.
             # TODO: The warning regarding weight_only option. Instead of pickling, just serialize them with json.
-            rng_states = torch.load(os.path.join(states_dir, "rng_states.pth"))
+            rng_states = torch.load(os.path.join(states_dir, SAVED_RNG_NAME))
             torch.set_rng_state(rng_states["torch_rng_state"])
             if rng_states["cuda_rng_state"] is not None:
                 torch.cuda.set_rng_state(rng_states["cuda_rng_state"])
@@ -132,7 +163,6 @@ class TrainingBaseSession(ABC):
         pass
 
     def _init_datasets(self) -> Tuple[Dataset, ValidationDatasetsDict]:
-        # TODO: Save random seeds for reproducibility (e.g., if train-valid splitting is done here).
 
         dataset_train, datasets_valid_dict = self.init_datasets()
 
@@ -166,3 +196,53 @@ class TrainingBaseSession(ABC):
 
     def dataloader_collate_function(self, batch: List[Any]) -> Dict[str, List[Any] | torch.Tensor]:
         return torch.utils.data.default_collate(batch)
+
+    @abstractmethod
+    def init_network(self) -> torch.nn.Module:
+        pass
+
+    def _init_network(self) -> torch.nn.Module:
+
+        network = self.init_network()
+        if not isinstance(network, torch.nn.Module):
+            raise TypeError("Failed to instantiate a valid `network`, an instance of `torch.nn.Module`.")
+
+        expected_network_class_name = self.config_network["architecture"]
+        if network.__class__.__name__ != expected_network_class_name:
+            raise TypeError(
+                "The loaded network is an instance of `{}`, whereas the network config was assuming"
+                " an instance of `{}` to be instantiated. Check the implementation of the abstract method"
+                "`init_network()` for errors or modify your network config accordingly.".format(
+                    network.__class__.__name__, expected_network_class_name))
+
+        return network
+
+    def init_optimizer(self) -> torch.optim:
+        optimizer = torch.optim.Adam(self.network.parameters(),
+                                     lr=self.config_session.learning_rate,
+                                     weight_decay=self.config_session.weight_decay)
+
+        return optimizer
+
+    def save_network_and_optimizer_states(self) -> None:
+        torch.save(self.network.state_dict(), os.path.join(self.run_dir, "states", SAVED_NETWORK_NAME))
+        torch.save(self.optimizer.state_dict(), os.path.join(self.run_dir, "states", SAVED_OPTIMIZER_NAME))
+
+    def load_network_and_optimizer_states_if_relevant(self, source_run_dir_tag: None | str,
+                                                      create_run_dir_afresh: bool) -> None:
+        if source_run_dir_tag is None:
+            if not create_run_dir_afresh:
+                raise ValueError("This cannot happen anyway.")
+            return
+
+        source_states_dir_path = os.path.join(os.path.dirname(self.run_dir), source_run_dir_tag, "states")
+        self.network = load_network_from_state_dict_to_device(
+            self.network,
+            state_dict_path=os.path.join(source_states_dir_path, SAVED_NETWORK_NAME),
+            device=self.device)
+
+        if create_run_dir_afresh:
+            return
+        # Optimizer states loaded only for fresh run, but network states loaded anyway (if source run is specified).
+        self.optimizer.load_state_dict(
+            torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME), weights_only=True))
