@@ -1,13 +1,14 @@
 import torch
 
 from torchbase.session import TrainingBaseSession
+from torchbase.session import SAVED_RNG_NAME
 from torchbase.utils.data import ValidationDatasetsDict, split_iterables
 
 from datasets import Dataset
 
 import unittest
 
-from typing import Dict, List, Tuple, Any, Callable
+from typing import Dict, Tuple
 import os
 import random
 import shutil
@@ -215,6 +216,18 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         )
 
         self.assertTrue(0 not in optimizer_reset.state_dict()["state"])
+
+    def test_invalid_source_states_dir(self):
+        source_session = self.session_fresh_run_pretrained_network
+        os.remove(os.path.join(source_session.run_dir, "states", SAVED_RNG_NAME))
+        time.sleep(1)  # To avoid creating the same tag again.
+        with self.assertRaises(FileNotFoundError):
+            ExampleTrainingSessionClass(
+                config=ExampleTrainingSessionClass.get_config(),
+                runs_parent_dir=TEST_STORAGE_DIR,
+                create_run_dir_afresh=False,
+                source_run_dir_tag=os.path.split(source_session.run_dir)[-1]
+            )
 
 
 if __name__ == "__main__":
