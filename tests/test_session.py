@@ -153,13 +153,14 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         self.assertIsNotNone(self.session_fresh_run_pretrained_network)
         self.assertIsInstance(self.session_fresh_run_pretrained_network, TrainingBaseSession)
 
-    def test_datasets_random_access(self):
+    def test_datasets_random_access_as_torch_tensor(self):
         datasets = ([self.session_fresh_run_fresh_network.dataset_train]
                     + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
         for dataset in datasets:
             idx = random.randint(0, dataset.__len__() - 1)
             for expected_keys in ["inputs", "labels"]:
                 self.assertIn(expected_keys, dataset[idx])
+                self.assertIsInstance(dataset[idx][expected_keys], torch.Tensor)
 
     def test_saved_random_states_replicability(self):
         dataset_initial = self.session_fresh_run_fresh_network.dataset_train

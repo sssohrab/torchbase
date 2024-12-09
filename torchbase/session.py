@@ -173,7 +173,9 @@ class TrainingBaseSession(ABC):
         if not datasets_valid_dict.is_valid():
             raise ValueError("Failed to create a valid `datasets_valid_dict`, an instance of `ValidationDatasetsDict`.")
 
-        # TODO: Convert from Huggingface to `torch.utils.data.Dataset` instances.
+        dataset_train = dataset_train.with_format("torch")
+        datasets_valid_dict.datasets = tuple([_dataset.with_format("torch")
+                                              for _dataset in datasets_valid_dict.datasets])
 
         return dataset_train, datasets_valid_dict
 
