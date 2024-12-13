@@ -135,7 +135,7 @@ class TrainingBaseSession(ABC):
         else:
             TrainingBaseSession.check_source_states_dir_is_valid(states_dir)
             # TODO: Take these static methods out of the class definition.
-            # TODO: The warning regarding weight_only option. Instead of pickling, just serialize them with json.
+            # TODO (#9): The warning regarding weight_only option. Instead of pickling, just serialize them with json.
             rng_states = torch.load(os.path.join(states_dir, SAVED_RNG_NAME))
             torch.set_rng_state(rng_states["torch_rng_state"])
             if rng_states["cuda_rng_state"] is not None:
@@ -173,14 +173,17 @@ class TrainingBaseSession(ABC):
         if not datasets_valid_dict.is_valid():
             raise ValueError("Failed to create a valid `datasets_valid_dict`, an instance of `ValidationDatasetsDict`.")
 
-        # TODO: Convert from Huggingface to `torch.utils.data.Dataset` instances.
+        dataset_train.set_format("torch")
+        for dataset in datasets_valid_dict.datasets:
+            dataset.set_format("torch")
 
         return dataset_train, datasets_valid_dict
 
     def init_dataloaders(self) -> Tuple[DataLoader, Dict[str, DataLoader]]:
-        # TODO: Decide on torch vs. huggingface dataloader.
-        # TODO: The dataloader for the streaming case.
-        # TODO: Dataloading with partial shuffling when there are shards of data.
+        # TODO (#13): `datasets.Dataset.shuffle()` or `torch.utils.data.DataLoader` ?
+        # TODO (#13): How about `torchdata.StatefulDataLoader` for full reproducibility of checkpoints?
+        # TODO (#10): When streaming mode gets support, dataloading and shuffling will get nuanced.
+
         dataloader_train = DataLoader(self.dataset_train, batch_size=self.config_session.mini_batch_size, shuffle=True,
                                       num_workers=self.config_session.dataloader_num_workers,
                                       collate_fn=self.dataloader_collate_function)

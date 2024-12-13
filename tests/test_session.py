@@ -153,13 +153,14 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         self.assertIsNotNone(self.session_fresh_run_pretrained_network)
         self.assertIsInstance(self.session_fresh_run_pretrained_network, TrainingBaseSession)
 
-    def test_datasets_random_access(self):
+    def test_datasets_random_access_as_torch_tensor(self):
         datasets = ([self.session_fresh_run_fresh_network.dataset_train]
                     + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
         for dataset in datasets:
             idx = random.randint(0, dataset.__len__() - 1)
             for expected_keys in ["inputs", "labels"]:
                 self.assertIn(expected_keys, dataset[idx])
+                self.assertIsInstance(dataset[idx][expected_keys], torch.Tensor)
 
     def test_saved_random_states_replicability(self):
         dataset_initial = self.session_fresh_run_fresh_network.dataset_train
@@ -172,8 +173,6 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
                                         runs_parent_dir=TEST_STORAGE_DIR,
                                         create_run_dir_afresh=False,
                                         source_run_dir_tag="Some-non-existing-tag")
-
-        # TODO: When networks loading is implemented, to test with a wrong source-dir.
 
     def test_config_saved_in_run_dir(self):
         run_dir = self.session_fresh_run_fresh_network.run_dir
@@ -228,6 +227,20 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
                 create_run_dir_afresh=False,
                 source_run_dir_tag=os.path.split(source_session.run_dir)[-1]
             )
+
+    def test_dataloader_instantiation(self):
+        self.assertIsInstance(self.session_fresh_run_fresh_network.dataloader_train, torch.utils.data.DataLoader)
+        self.assertIsInstance(self.session_fresh_run_fresh_network.dataloader_valid_dict, Dict)
+        for dataset_name in self.session_fresh_run_fresh_network.datasets_valid_dict.names:
+            self.assertIsInstance(self.session_fresh_run_fresh_network.dataloader_valid_dict[dataset_name],
+                                  torch.utils.data.DataLoader)
+
+    def test_dataloader_basic_functionality(self):
+
+        dataloader = self.session_existing_run.dataloader_train
+        mini_batch = next(iter(dataloader))
+        self.assertEqual(mini_batch["inputs"].shape[0], self.session_existing_run.config_session.mini_batch_size)
+        self.assertEqual(mini_batch["labels"].shape[0], self.session_existing_run.config_session.mini_batch_size)
 
 
 if __name__ == "__main__":
