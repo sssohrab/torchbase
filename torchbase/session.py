@@ -1,6 +1,7 @@
 from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
 from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.networks import load_network_from_state_dict_to_device
+from torchbase.utils.logger import ProgressManager, ValuesLogger, LoggableParams
 
 import numpy as np
 import torch
@@ -249,3 +250,25 @@ class TrainingBaseSession(ABC):
         # Optimizer states loaded only for fresh run, but network states loaded anyway (if source run is specified).
         self.optimizer.load_state_dict(
             torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME), weights_only=True))
+
+    @abstractmethod
+    def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
+        inp = mini_batch["some_key"].to(self.device)
+        out = self.network(inp)
+
+        _dict = {"input": inp,
+                 "output": out}  # Keys corresponding to anything the loss function or metrics calculation would need.
+
+        return _dict
+
+    @abstractmethod
+    def loss_function(self, **kwargs: Any) -> torch.Tensor:
+        # Implement a keyword-only function with keys included in `self.forward_pass` output dictionary.
+        # Optionally use some params from  self.config_session.loss_function_params
+
+        return torch.empty(requires_grad=True)
+
+    @staticmethod
+    def get_loss_value(*, loss_tensor: torch.Tensor) -> float:
+        # Override if `self.loss_function` provides non-scalar outputs.
+        return loss_tensor.item()
