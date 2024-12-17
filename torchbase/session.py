@@ -52,6 +52,20 @@ class TrainingBaseSession(ABC):
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
 
+        self.progress_train = ProgressManager()
+        self.loggable_train = LoggableParams({"loss": self.get_loss_value})
+        self.value_logger_train = ValuesLogger(self.loggable_train.get_names(), progress_manager=self.progress_train)
+
+        self.progress_valid_dict = {valid_dataset_name: ProgressManager() for valid_dataset_name in
+                                    self.datasets_valid_dict.names}
+        self.loggable_valid_dict = {
+            valid_dataset_name: LoggableParams({"loss": self.get_loss_value})
+            for valid_dataset_name in self.datasets_valid_dict.names}
+        self.value_logger_valid_dict = {
+            valid_dataset_name: ValuesLogger(self.loggable_train.get_names(),
+                                             progress_manager=self.progress_valid_dict[valid_dataset_name]) for
+            valid_dataset_name in self.datasets_valid_dict.names}
+
     @staticmethod
     def setup_configs(config: Dict) -> Tuple[TrainingConfigSessionDict, Dict, Dict, Dict]:
         if not isinstance(config, dict):
