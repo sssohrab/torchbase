@@ -8,7 +8,7 @@ from datasets import Dataset
 
 import unittest
 
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 import os
 import random
 import shutil
@@ -19,16 +19,16 @@ TEST_STORAGE_DIR = os.path.join(os.path.split(os.path.abspath(__file__))[0], "st
 os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
 
 
-class ExampleTrainingSessionClass(TrainingBaseSession):
+class ExampleTrainingSessionClassStatic(TrainingBaseSession):
     @staticmethod
     def get_config() -> Dict:
         config = {
             "session": {
                 "device_name": "cpu",
-                "num_epochs": 5,
+                "num_epochs": 1,
                 "mini_batch_size": 4,
-                "learning_rate": 0.001,
-                "weight_decay": 1e-6,
+                "learning_rate": 0.01,
+                "weight_decay": 0.0,
                 "dataloader_num_workers": 0,
             },
             "data": {
@@ -89,8 +89,14 @@ class ExampleTrainingSessionClass(TrainingBaseSession):
 
         return network
 
+    def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
+        pass
 
-class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
+    def loss_function(self, **kwargs: Any) -> torch.Tensor:
+        pass
+
+
+class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         if os.path.exists(os.path.join(TEST_STORAGE_DIR)):
@@ -98,8 +104,8 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
         # TODO: Create a temp folder in memory not disk
 
-        cls.session_fresh_run_fresh_network = ExampleTrainingSessionClass(
-            config=ExampleTrainingSessionClass.get_config(),
+        cls.session_fresh_run_fresh_network = ExampleTrainingSessionClassStatic(
+            config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
             source_run_dir_tag=None
@@ -109,15 +115,15 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
 
         time.sleep(1)  # To avoid creating the same tag again.
 
-        cls.session_existing_run = ExampleTrainingSessionClass(
-            config=ExampleTrainingSessionClass.get_config(),
+        cls.session_existing_run = ExampleTrainingSessionClassStatic(
+            config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=False,
             source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1]
         )
 
-        cls.session_fresh_run_pretrained_network = ExampleTrainingSessionClass(
-            config=ExampleTrainingSessionClass.get_config(),
+        cls.session_fresh_run_pretrained_network = ExampleTrainingSessionClassStatic(
+            config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
             source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1]
@@ -169,10 +175,10 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
 
     def test_existing_run_dir_but_no_run_tag_specified(self):
         with self.assertRaises(ValueError):
-            ExampleTrainingSessionClass(config=ExampleTrainingSessionClass.get_config(),
-                                        runs_parent_dir=TEST_STORAGE_DIR,
-                                        create_run_dir_afresh=False,
-                                        source_run_dir_tag="Some-non-existing-tag")
+            ExampleTrainingSessionClassStatic(config=ExampleTrainingSessionClassStatic.get_config(),
+                                              runs_parent_dir=TEST_STORAGE_DIR,
+                                              create_run_dir_afresh=False,
+                                              source_run_dir_tag="Some-non-existing-tag")
 
     def test_config_saved_in_run_dir(self):
         run_dir = self.session_fresh_run_fresh_network.run_dir
@@ -187,11 +193,11 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         self.assertEqual(saved_config["metrics"], self.session_fresh_run_fresh_network.config_metrics)
 
     def test_network_init_and_declared_architecture_mismatch(self):
-        wrong_config = ExampleTrainingSessionClass.get_config()
+        wrong_config = ExampleTrainingSessionClassStatic.get_config()
         wrong_config["network"]["architecture"] = "SomeMistakenlyHeldNetworkName"
         with self.assertRaises(TypeError):
             time.sleep(1)  # To avoid creating the same tag again.
-            ExampleTrainingSessionClass(config=wrong_config, runs_parent_dir=TEST_STORAGE_DIR)
+            ExampleTrainingSessionClassStatic(config=wrong_config, runs_parent_dir=TEST_STORAGE_DIR)
 
     def test_network_loading(self):
         network_saved = self.session_fresh_run_fresh_network.network
@@ -221,8 +227,8 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         os.remove(os.path.join(source_session.run_dir, "states", SAVED_RNG_NAME))
         time.sleep(1)  # To avoid creating the same tag again.
         with self.assertRaises(FileNotFoundError):
-            ExampleTrainingSessionClass(
-                config=ExampleTrainingSessionClass.get_config(),
+            ExampleTrainingSessionClassStatic(
+                config=ExampleTrainingSessionClassStatic.get_config(),
                 runs_parent_dir=TEST_STORAGE_DIR,
                 create_run_dir_afresh=False,
                 source_run_dir_tag=os.path.split(source_session.run_dir)[-1]
