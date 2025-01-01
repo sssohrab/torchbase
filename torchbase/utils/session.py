@@ -50,13 +50,23 @@ class TrainingConfigSessionDict:
             return False
         if not isinstance(self.num_epochs, int):
             return False
+        if self.num_epochs <= 0:
+            return False
         if not isinstance(self.mini_batch_size, int):
+            return False
+        if self.mini_batch_size <= 0:
             return False
         if not isinstance(self.learning_rate, float):
             return False
+        if self.learning_rate <= 0:
+            return False
         if not isinstance(self.weight_decay, float):
             return False
+        if self.weight_decay <= 0:
+            return False
         if not isinstance(self.dataloader_num_workers, int):
+            return False
+        if self.dataloader_num_workers < 0:
             return False
         if self.loss_function_params is not None:
             if not isinstance(self.loss_function_params, dict):
