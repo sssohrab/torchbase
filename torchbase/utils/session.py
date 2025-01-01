@@ -62,7 +62,7 @@ class TrainingConfigSessionDict:
             return False
         if not isinstance(self.weight_decay, float):
             return False
-        if self.weight_decay <= 0:
+        if self.weight_decay < 0:
             return False
         if not isinstance(self.dataloader_num_workers, int):
             return False
