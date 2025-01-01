@@ -1,14 +1,15 @@
-import torch
-
 from torchbase.session import TrainingBaseSession
 from torchbase.session import SAVED_RNG_NAME
 from torchbase.utils.data import ValidationDatasetsDict, split_iterables
 
+import torch
+from torchvision import transforms
 from datasets import Dataset
+import datasets
 
 import unittest
 
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, List
 import os
 import random
 import shutil
@@ -247,6 +248,128 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
         mini_batch = next(iter(dataloader))
         self.assertEqual(mini_batch["inputs"].shape[0], self.session_existing_run.config_session.mini_batch_size)
         self.assertEqual(mini_batch["labels"].shape[0], self.session_existing_run.config_session.mini_batch_size)
+
+
+class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
+    @staticmethod
+    def get_config() -> Dict:
+        config = {
+            "session": {
+                "device_name": "cpu",
+                "num_epochs": 5,
+                "mini_batch_size": 4,
+                "learning_rate": 0.001,
+                "weight_decay": 1e-6,
+                "dataloader_num_workers": 0,
+            },
+            "data": {
+                "num_samples": 20,
+                "image_size": (32, 32),
+                "split_portions": (0.8, 0.2)
+            },
+            "metrics": {},
+            "network": {
+                "architecture": "SomeExampleNet",
+                "num_ch": 2
+            }
+        }
+
+        return config
+
+    def init_datasets(self) -> Tuple[Dataset, ValidationDatasetsDict]:
+        def generate_random_data_for_test(num_samples: int, image_size: Tuple[int, int]) -> Dict[str, List]:
+            data = {"image": [], "image_noisy": []}
+
+            for _ in range(num_samples):
+                image = torch.zeros(3, *image_size)
+                num_rectangles = random.randint(0, 3)
+                for _ in range(num_rectangles):
+                    x1, y1 = torch.randint(0, image_size[0] // 2, (2,))
+                    x2, y2 = torch.randint(image_size[0] // 2, image_size[0], (2,))
+                    color = torch.rand(3)
+
+                    image[:, x1:x2, y1:y2] = color.unsqueeze(1).unsqueeze(2)
+
+                noise = torch.randn_like(image) * 0.2
+                image_noisy = torch.clamp(image + noise, 0, 1)
+
+                data["image"].append(image)
+                data["image_noisy"].append(image_noisy)
+
+            return data
+
+        def augment(item: Dict) -> Dict:
+            rotation = transforms.RandomRotation(degrees=(-30, 30))  # Rotate between -30 and 30 degrees
+
+            image = torch.tensor(item["image"])
+            image_noisy = torch.tensor(item["image_noisy"])
+
+            item["image"] = rotation(image)
+            item["noisy_image"] = rotation(image_noisy)
+
+            return item
+
+        data_train, data_valid = split_iterables(generate_random_data_for_test(
+            num_samples=self.config_data["num_samples"], image_size=self.config_data["image_size"]),
+            portions=self.config_data["split_portions"],
+            shuffle=True)
+
+        dataset_train_without_augmentation = Dataset.from_dict(data_train)
+        dataset_train_with_augmentation = Dataset.from_dict(data_train).map(lambda x: augment(x))
+        dataset_valid_without_augmentation = Dataset.from_dict(data_valid)
+        dataset_valid_with_augmentation = Dataset.from_dict(data_valid).map(augment)
+
+        return (dataset_train_with_augmentation,
+                ValidationDatasetsDict(
+                    datasets=(dataset_train_without_augmentation,
+                              dataset_valid_with_augmentation,
+                              dataset_valid_without_augmentation),
+                    only_for_demo=(True, False, False),
+                    names=("train-no-aug", "valid-with-aug", "valid-no-aug")
+                ))
+
+    def init_network(self) -> torch.nn.Module:
+        class SomeExampleNet(torch.nn.Module):
+            def __init__(self, num_ch: int):
+                super().__init__()
+                self.conv1 = torch.nn.Conv2d(1, num_ch, 3, padding=1)
+                self.conv2 = torch.nn.Conv2d(num_ch, 1, 3, padding=1)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                x = self.conv1(x)
+                x = torch.nn.ReLU()(x)
+                x = self.conv2(x)
+
+                return x
+
+        network = SomeExampleNet(num_ch=self.config_network["num_ch"])
+
+        return network
+
+    def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
+        pass
+
+    def loss_function(self, **kwargs: Any) -> torch.Tensor:
+        pass
+
+
+class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        if os.path.exists(os.path.join(TEST_STORAGE_DIR)):
+            shutil.rmtree(os.path.join(TEST_STORAGE_DIR))
+        os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
+        # TODO: Create a temp folder in memory not disk
+
+        cls.session = ExampleTrainingSessionClassDynamic(
+            config=ExampleTrainingSessionClassDynamic.get_config(),
+            runs_parent_dir=TEST_STORAGE_DIR,
+            tag_postfix="dynamic"
+        )
+
+    @classmethod
+    def tearDown(cls) -> None:
+        cls.session.writer.close()
 
 
 if __name__ == "__main__":
