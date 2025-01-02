@@ -257,7 +257,7 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
             "session": {
                 "device_name": "cpu",
                 "num_epochs": 5,
-                "mini_batch_size": 4,
+                "mini_batch_size": 6,
                 "learning_rate": 0.001,
                 "weight_decay": 1e-6,
                 "dataloader_num_workers": 0,
@@ -370,6 +370,15 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
     @classmethod
     def tearDown(cls) -> None:
         cls.session.writer.close()
+
+    def test_forward_and_loss_functions(self):
+        # TODO
+        pass
+
+    def test_infer_mini_batch_size(self):
+        for mini_batch in self.session.dataloader_train:
+            inferred_mini_batch_size = self.session.infer_mini_batch_size(mini_batch)
+            self.assertLessEqual(inferred_mini_batch_size, self.session.config_session.mini_batch_size)
 
 
 if __name__ == "__main__":

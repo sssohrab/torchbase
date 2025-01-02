@@ -286,3 +286,21 @@ class TrainingBaseSession(ABC):
     def get_loss_value(*, loss_tensor: torch.Tensor) -> float:
         # Override if `self.loss_function` provides non-scalar outputs.
         return loss_tensor.item()
+
+    @staticmethod
+    def infer_mini_batch_size(mini_batch: Dict[str, Any | torch.Tensor]) -> int:
+        mini_batch_size = None
+        for key, val in mini_batch.items():
+            if isinstance(val, torch.Tensor):
+                if mini_batch_size is None:
+                    mini_batch_size = val.shape[0]  # Assuming PyTorch convention.
+                else:
+                    this_mini_batch_size = val.shape[0]
+                    if this_mini_batch_size != mini_batch_size:
+                        raise RuntimeError("Inconsistent sizes between different fields of the mini-batch.")
+
+        if mini_batch_size is None:
+            raise RuntimeError("Did not manage to infer the mini-batch size from the provided `mini_batch`. Check"
+                               "the implementation of `self.dataloader_collate_function`")
+
+        return mini_batch_size
