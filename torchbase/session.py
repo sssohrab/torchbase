@@ -304,3 +304,39 @@ class TrainingBaseSession(ABC):
                                "the implementation of `self.dataloader_collate_function`")
 
         return mini_batch_size
+
+    def do_one_training_iteration(self, mini_batch: Dict[str, Any | torch.Tensor]) -> None:
+        self.network.train()
+        outs_dict = self.forward_pass(mini_batch)
+        loss_function_signature = inspect.signature(self.loss_function)
+        loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
+
+        self.optimizer.zero_grad()
+        assert not torch.isnan(loss), "A NaN value detected during loss function evaluation."
+        loss.backward()
+        # TODO: torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
+        self.optimizer.step()
+        self.progress_train.increment_iter(self.infer_mini_batch_size(mini_batch))
+        # `outs_dict` is supposed to have all key-value pairs required by functionals in metrics.
+        self.value_logger_train.update(self.loggable_train(**{"loss_tensor": loss}, **outs_dict))
+
+        for param in self.value_logger_train.names:
+            self.writer.add_scalar("training/{}/iterations".format(param),
+                                   self.value_logger_train.current_values[param],
+                                   self.progress_train.iter_total)
+
+    def do_one_validation_iteration(self, mini_batch: Dict[str, Any | torch.Tensor], valid_dataset_name: str) -> None:
+        self.network.eval()
+        with torch.no_grad():
+            outs_dict = self.forward_pass(mini_batch)
+
+        loss_function_signature = inspect.signature(self.loss_function)
+        loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
+        self.progress_valid_dict[valid_dataset_name].increment_iter(self.infer_mini_batch_size(mini_batch))
+        self.value_logger_valid_dict[valid_dataset_name].update(
+            self.loggable_valid_dict[valid_dataset_name](**{"loss_tensor": loss}, **outs_dict))
+
+        for param in self.value_logger_valid_dict[valid_dataset_name].names:
+            self.writer.add_scalar("validation-{}/{}/iterations".format(valid_dataset_name, param),
+                                   self.value_logger_valid_dict[valid_dataset_name].current_values[param],
+                                   self.progress_valid_dict[valid_dataset_name].iter_total)
