@@ -381,3 +381,53 @@ class TrainingBaseSession(ABC):
             self.writer.add_scalar("validation-{}/{}/iterations".format(valid_dataset_name, param),
                                    self.value_logger_valid_dict[valid_dataset_name].current_values[param],
                                    self.progress_valid_dict[valid_dataset_name].iter_total)
+
+    def do_one_training_epoch(self) -> None:
+        start_iter_index = self.progress_train.iter_current_epoch
+        # TODO (#13): Progress bar à la tqdm?
+        for (ind, mini_batch) in enumerate(self.dataloader_train):
+            self.do_one_training_iteration(mini_batch)
+            if self.progress_train.iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
+                self.save_training_states()
+            for param in self.value_logger_train.names:
+                self.writer.add_scalar("training/{}/epochs".format(param),
+                                       self.value_logger_train.average_of_epoch[param],
+                                       self.progress_train.epoch + 1)
+
+            self.print("training | epoch = {:0{}d}/{}\t"
+                       "iter = {:0{}d}/{}\t"
+                       "loss = {:.5f}".format(self.progress_train.epoch + 1,
+                                              int(np.ceil(np.log10(self.config_session.num_epochs))),
+                                              self.config_session.num_epochs,
+                                              self.progress_train.iter_current_epoch,
+                                              int(np.ceil(np.log10(len(self.dataloader_train)))),
+                                              len(self.dataloader_train) + start_iter_index,
+                                              self.value_logger_train.current_values["loss"]))
+
+        self.progress_train.increment_epoch()
+
+    def do_one_validation_epoch(self, valid_dataset_name: str) -> None:
+        start_iter_index = self.progress_valid_dict[valid_dataset_name].iter_current_epoch
+        for (ind, mini_batch) in enumerate(self.dataloader_valid_dict[valid_dataset_name]):
+            self.do_one_validation_iteration(mini_batch, valid_dataset_name)
+            if self.progress_valid_dict[valid_dataset_name].iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
+                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
+
+            for param in self.value_logger_valid_dict[valid_dataset_name].names:
+                self.writer.add_scalar("validation-{}/{}/epochs".format(valid_dataset_name, param),
+                                       self.value_logger_valid_dict[valid_dataset_name].average_of_epoch[param],
+                                       self.progress_valid_dict[valid_dataset_name].epoch + 1)
+
+            self.print("validation-{} | epoch = {:0{}d}/{}\t"
+                       "iter = {:0{}d}/{}\t"
+                       "loss = {:.5f}".format(valid_dataset_name,
+                                              self.progress_valid_dict[valid_dataset_name].epoch + 1,
+                                              int(np.ceil(np.log10(self.config_session.num_epochs))),
+                                              self.config_session.num_epochs,
+                                              self.progress_valid_dict[valid_dataset_name].iter_current_epoch,
+                                              int(np.ceil(
+                                                  np.log10(len(self.dataloader_valid_dict[valid_dataset_name])))),
+                                              len(self.dataloader_valid_dict[valid_dataset_name]) + start_iter_index,
+                                              self.value_logger_valid_dict[valid_dataset_name].current_values["loss"]))
+
+        self.progress_valid_dict[valid_dataset_name].increment_epoch()
