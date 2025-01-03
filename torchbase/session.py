@@ -21,6 +21,7 @@ import json
 SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
 SAVED_RNG_NAME = "rng_states.pth"
+ITERATION_STEPS_TO_SAVE_STATES = 10
 
 
 class TrainingBaseSession(ABC):
@@ -265,6 +266,17 @@ class TrainingBaseSession(ABC):
         self.optimizer.load_state_dict(
             torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME), weights_only=True))
 
+    def save_training_states(self) -> None:
+        states_dir_path = os.path.join(self.run_dir, "states")
+        torch.save(self.network.state_dict(), os.path.join(states_dir_path, SAVED_NETWORK_NAME))
+        torch.save(self.optimizer.state_dict(), os.path.join(states_dir_path, SAVED_OPTIMIZER_NAME))
+
+        # TODO: learning rate scheduler state_dicts
+        # TODO (#13): Dataloader states dict (maybe from torchdata.StatefulDataLoader)
+
+        self.progress_train.serialize_to_disk(os.path.join(states_dir_path, "progress_manager_train.json"))
+        self.value_logger_train.serialize_to_disk(os.path.join(states_dir_path, "values_logger_train.json"))
+
     @abstractmethod
     def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
         inp = mini_batch["some_key"].to(self.device)
@@ -310,9 +322,9 @@ class TrainingBaseSession(ABC):
         outs_dict = self.forward_pass(mini_batch)
         loss_function_signature = inspect.signature(self.loss_function)
         loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
+        assert not torch.isnan(loss), "A NaN value detected during loss function evaluation."
 
         self.optimizer.zero_grad()
-        assert not torch.isnan(loss), "A NaN value detected during loss function evaluation."
         loss.backward()
         # TODO: torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
         self.optimizer.step()
