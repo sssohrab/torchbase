@@ -17,6 +17,7 @@ import inspect
 import os
 import random
 import json
+import shutil
 
 SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
@@ -489,3 +490,13 @@ class TrainingBaseSession(ABC):
             # TODO: JIT-compilation of the final saved model.2
 
         self.writer.close()
+
+    def __call__(self):
+        try:
+            self.train()
+        except BaseException as e:
+            if not os.path.exists(os.path.join(self.run_dir, "states", SAVED_NETWORK_NAME)):
+                shutil.rmtree(self.run_dir)
+                self.print("Removed this run's log-dir altogether, since encountered the exception {}, "
+                           "before any useful state could be saved.".format(type(e).__name__))
+            raise e
