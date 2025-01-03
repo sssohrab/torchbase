@@ -67,6 +67,14 @@ class TrainingBaseSession(ABC):
                                              progress_manager=self.progress_valid_dict[valid_dataset_name]) for
             valid_dataset_name in self.datasets_valid_dict.names}
 
+        self.best_validation_loss_dict: Dict[str, Tuple[float, int]] = {}
+
+    @staticmethod
+    def print(report: str, end: str | None = None) -> None:
+        # TODO (#13): Maybe using the `logging` package to handle various levels of messages.
+        # TODO (#13): A global mechanism to activate/deactivate printing, writing to log files, etc.
+        print(report, end=end)
+
     @staticmethod
     def setup_configs(config: Dict) -> Tuple[TrainingConfigSessionDict, Dict, Dict, Dict]:
         if not isinstance(config, dict):
@@ -138,8 +146,14 @@ class TrainingBaseSession(ABC):
             raise FileNotFoundError("The optimizer `states_dict` file does not exist in the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
 
-    @staticmethod
-    def configure_states_dir_and_randomness_sources(run_dir: str, create_run_dir_afresh: bool) -> None:
+    def init_best_validation_loss_dict(self) -> Dict[str, Tuple[float, int]]:
+        best_validation_loss_dict = {
+            self.datasets_valid_dict.names[ind]: (float("inf"), -2) for
+            ind in range(len(self.datasets_valid_dict.names)) if not self.datasets_valid_dict.only_for_demo[ind]}
+
+        return best_validation_loss_dict
+
+    def configure_states_dir_and_randomness_sources(self, run_dir: str, create_run_dir_afresh: bool) -> None:
         states_dir = os.path.join(run_dir, "states")
 
         if create_run_dir_afresh:
@@ -148,9 +162,11 @@ class TrainingBaseSession(ABC):
                         "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
                         "numpy_rng_state": np.random.get_state(),
                         "random_rng_state": random.getstate()}, os.path.join(states_dir, SAVED_RNG_NAME))
+
+            self.best_validation_loss_dict = self.init_best_validation_loss_dict()
+
         else:
             TrainingBaseSession.check_source_states_dir_is_valid(states_dir)
-            # TODO: Take these static methods out of the class definition.
             # TODO (#9): The warning regarding weight_only option. Instead of pickling, just serialize them with json.
             rng_states = torch.load(os.path.join(states_dir, SAVED_RNG_NAME))
             torch.set_rng_state(rng_states["torch_rng_state"])
@@ -158,6 +174,9 @@ class TrainingBaseSession(ABC):
                 torch.cuda.set_rng_state(rng_states["cuda_rng_state"])
             np.random.set_state(rng_states["numpy_rng_state"])
             random.setstate(rng_states["random_rng_state"])
+
+            with open(os.path.join(states_dir, "best_validation_loss_dict.json"), "r") as f:
+                self.best_validation_loss_dict = json.load(f)
 
     def save_config_to_run_dir(self, create_run_dir_afresh: bool) -> None:
         config = {
@@ -276,6 +295,16 @@ class TrainingBaseSession(ABC):
 
         self.progress_train.serialize_to_disk(os.path.join(states_dir_path, "progress_manager_train.json"))
         self.value_logger_train.serialize_to_disk(os.path.join(states_dir_path, "values_logger_train.json"))
+
+    def save_progress_and_log_states_for_valid_set(self, valid_dataset_name: str):
+        states_dir_path = os.path.join(self.run_dir, "states")
+        self.progress_valid_dict[valid_dataset_name].serialize_to_disk(
+            os.path.join(states_dir_path, "progress_manager_valid_{}.json".format(valid_dataset_name)))
+        self.value_logger_valid_dict[valid_dataset_name].serialize_to_disk(
+            os.path.join(states_dir_path, "values_logger_valid_{}.json".format(valid_dataset_name)))
+
+        with open(os.path.join(states_dir_path, "best_validation_loss_dict.json"), "w") as f:
+            json.dump(self.best_validation_loss_dict, f, indent=2)
 
     @abstractmethod
     def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
