@@ -400,6 +400,34 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
             inferred_mini_batch_size = self.session.infer_mini_batch_size(mini_batch)
             self.assertLessEqual(inferred_mini_batch_size, self.session.config_session.mini_batch_size)
 
+    def test_do_one_training_iteration(self):
+        self.assertEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
+        self.assertEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 0)
+        self.assertEqual(self.session.progress_train.epoch, 0)
+
+        mini_batch = next(iter(self.session.dataloader_train))
+        self.session.do_one_training_iteration(mini_batch)
+
+        self.assertTrue(self.session.network.training)
+        self.assertNotEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
+        self.assertEqual(self.session.value_logger_train.average_overall["loss"],
+                         self.session.value_logger_train.average_of_epoch["loss"])
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 1)
+        self.assertEqual(self.session.progress_train.epoch, 0)
+
+        self.session.value_logger_train.reset()
+
+    def test_do_one_validation_iteration(self):
+        for valid_dataset_name in self.session.datasets_valid_dict.names:
+            mini_batch = next(iter(self.session.dataloader_valid_dict[valid_dataset_name]))
+            self.session.do_one_validation_iteration(mini_batch, valid_dataset_name)
+            self.assertFalse(self.session.network.training)
+            self.assertNotEqual(self.session.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"],
+                                0.0)
+
+            self.session.value_logger_valid_dict[valid_dataset_name].reset()
+
 
 if __name__ == "__main__":
     unittest.main()
