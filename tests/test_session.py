@@ -148,6 +148,8 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
             cls.session_fresh_run_fresh_network.optimizer.step()
 
         cls.session_fresh_run_fresh_network.save_network_and_optimizer_states()
+        for valid_dataset_name in cls.session_fresh_run_fresh_network.datasets_valid_dict.names:
+            cls.session_fresh_run_fresh_network.save_progress_and_log_states_for_valid_set(valid_dataset_name)
 
     def test_instantiate_session_with_fresh_run_fresh_network(self):
         self.assertIsNotNone(self.session_fresh_run_fresh_network)
