@@ -1,6 +1,7 @@
 from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
 from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.networks import load_network_from_state_dict_to_device
+from torchbase.utils.logger import ProgressManager, ValuesLogger, LoggableParams
 
 import numpy as np
 import torch
@@ -16,10 +17,12 @@ import inspect
 import os
 import random
 import json
+import shutil
 
 SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
 SAVED_RNG_NAME = "rng_states.pth"
+ITERATION_STEPS_TO_SAVE_STATES = 10
 
 
 class TrainingBaseSession(ABC):
@@ -50,6 +53,28 @@ class TrainingBaseSession(ABC):
         self.load_network_and_optimizer_states_if_relevant(source_run_dir_tag, create_run_dir_afresh)
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
+
+        self.progress_train = ProgressManager()
+        self.loggable_train = LoggableParams({"loss": self.get_loss_value})
+        self.value_logger_train = ValuesLogger(self.loggable_train.get_names(), progress_manager=self.progress_train)
+
+        self.progress_valid_dict = {valid_dataset_name: ProgressManager() for valid_dataset_name in
+                                    self.datasets_valid_dict.names}
+        self.loggable_valid_dict = {
+            valid_dataset_name: LoggableParams({"loss": self.get_loss_value})
+            for valid_dataset_name in self.datasets_valid_dict.names}
+        self.value_logger_valid_dict = {
+            valid_dataset_name: ValuesLogger(self.loggable_train.get_names(),
+                                             progress_manager=self.progress_valid_dict[valid_dataset_name]) for
+            valid_dataset_name in self.datasets_valid_dict.names}
+
+        self.best_validation_loss_dict = self.init_or_load_best_validation_loss_dict(create_run_dir_afresh)
+
+    @staticmethod
+    def print(report: str, end: str | None = None) -> None:
+        # TODO (#13): Maybe using the `logging` package to handle various levels of messages.
+        # TODO (#13): A global mechanism to activate/deactivate printing, writing to log files, etc.
+        print(report, end=end)
 
     @staticmethod
     def setup_configs(config: Dict) -> Tuple[TrainingConfigSessionDict, Dict, Dict, Dict]:
@@ -122,6 +147,20 @@ class TrainingBaseSession(ABC):
             raise FileNotFoundError("The optimizer `states_dict` file does not exist in the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
 
+    def init_or_load_best_validation_loss_dict(self, create_run_dir_afresh: bool) -> Dict[str, Tuple[float, int]]:
+        if create_run_dir_afresh:
+            best_validation_loss_dict = {
+                self.datasets_valid_dict.names[ind]: (float("inf"), -2) for
+                ind in range(len(self.datasets_valid_dict.names)) if not self.datasets_valid_dict.only_for_demo[ind]}
+
+            return best_validation_loss_dict
+        else:
+            states_dir_path = os.path.join(self.run_dir, "states")
+            with open(os.path.join(states_dir_path, "best_validation_loss_dict.json"), "r") as f:
+                best_validation_loss_dict = json.load(f)
+
+            return best_validation_loss_dict
+
     @staticmethod
     def configure_states_dir_and_randomness_sources(run_dir: str, create_run_dir_afresh: bool) -> None:
         states_dir = os.path.join(run_dir, "states")
@@ -132,9 +171,9 @@ class TrainingBaseSession(ABC):
                         "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
                         "numpy_rng_state": np.random.get_state(),
                         "random_rng_state": random.getstate()}, os.path.join(states_dir, SAVED_RNG_NAME))
+
         else:
             TrainingBaseSession.check_source_states_dir_is_valid(states_dir)
-            # TODO: Take these static methods out of the class definition.
             # TODO (#9): The warning regarding weight_only option. Instead of pickling, just serialize them with json.
             rng_states = torch.load(os.path.join(states_dir, SAVED_RNG_NAME))
             torch.set_rng_state(rng_states["torch_rng_state"])
@@ -249,3 +288,215 @@ class TrainingBaseSession(ABC):
         # Optimizer states loaded only for fresh run, but network states loaded anyway (if source run is specified).
         self.optimizer.load_state_dict(
             torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME), weights_only=True))
+
+    def save_training_states(self) -> None:
+        states_dir_path = os.path.join(self.run_dir, "states")
+        torch.save(self.network.state_dict(), os.path.join(states_dir_path, SAVED_NETWORK_NAME))
+        torch.save(self.optimizer.state_dict(), os.path.join(states_dir_path, SAVED_OPTIMIZER_NAME))
+
+        # TODO: learning rate scheduler state_dicts
+        # TODO (#13): Dataloader states dict (maybe from torchdata.StatefulDataLoader)
+
+        self.progress_train.serialize_to_disk(os.path.join(states_dir_path, "progress_manager_train.json"))
+        self.value_logger_train.serialize_to_disk(os.path.join(states_dir_path, "values_logger_train.json"))
+
+    def save_progress_and_log_states_for_valid_set(self, valid_dataset_name: str):
+        states_dir_path = os.path.join(self.run_dir, "states")
+        self.progress_valid_dict[valid_dataset_name].serialize_to_disk(
+            os.path.join(states_dir_path, "progress_manager_valid_{}.json".format(valid_dataset_name)))
+        self.value_logger_valid_dict[valid_dataset_name].serialize_to_disk(
+            os.path.join(states_dir_path, "values_logger_valid_{}.json".format(valid_dataset_name)))
+
+        with open(os.path.join(states_dir_path, "best_validation_loss_dict.json"), "w") as f:
+            json.dump(self.best_validation_loss_dict, f, indent=2)
+
+    @abstractmethod
+    def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
+        inp = mini_batch["some_key"].to(self.device)
+        out = self.network(inp)
+
+        _dict = {"input": inp,
+                 "output": out}  # Keys corresponding to anything the loss function or metrics calculation would need.
+
+        return _dict
+
+    @abstractmethod
+    def loss_function(self, **kwargs: Any) -> torch.Tensor:
+        # Implement a keyword-only function with keys included in `self.forward_pass` output dictionary.
+        # Optionally use some params from  self.config_session.loss_function_params
+
+        return torch.empty(requires_grad=True)
+
+    @staticmethod
+    def get_loss_value(*, loss_tensor: torch.Tensor) -> float:
+        # Override if `self.loss_function` provides non-scalar outputs.
+        return loss_tensor.item()
+
+    @staticmethod
+    def infer_mini_batch_size(mini_batch: Dict[str, Any | torch.Tensor]) -> int:
+        mini_batch_size = None
+        for key, val in mini_batch.items():
+            if isinstance(val, torch.Tensor):
+                if mini_batch_size is None:
+                    mini_batch_size = val.shape[0]  # Assuming PyTorch convention.
+                else:
+                    this_mini_batch_size = val.shape[0]
+                    if this_mini_batch_size != mini_batch_size:
+                        raise RuntimeError("Inconsistent sizes between different fields of the mini-batch.")
+
+        if mini_batch_size is None:
+            raise RuntimeError("Did not manage to infer the mini-batch size from the provided `mini_batch`. Check"
+                               "the implementation of `self.dataloader_collate_function`")
+
+        return mini_batch_size
+
+    def do_one_training_iteration(self, mini_batch: Dict[str, Any | torch.Tensor]) -> None:
+        self.network.train()
+        outs_dict = self.forward_pass(mini_batch)
+        loss_function_signature = inspect.signature(self.loss_function)
+        loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
+        assert not torch.isnan(loss), "A NaN value detected during loss function evaluation."
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        # TODO: torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
+        self.optimizer.step()
+        self.progress_train.increment_iter(self.infer_mini_batch_size(mini_batch))
+        # `outs_dict` is supposed to have all key-value pairs required by functionals in metrics.
+        self.value_logger_train.update(self.loggable_train(**{"loss_tensor": loss}, **outs_dict))
+
+        for param in self.value_logger_train.names:
+            self.writer.add_scalar("training/{}/iterations".format(param),
+                                   self.value_logger_train.current_values[param],
+                                   self.progress_train.iter_total)
+
+    def do_one_validation_iteration(self, mini_batch: Dict[str, Any | torch.Tensor], valid_dataset_name: str) -> None:
+        self.network.eval()
+        with torch.no_grad():
+            outs_dict = self.forward_pass(mini_batch)
+
+        loss_function_signature = inspect.signature(self.loss_function)
+        loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
+        self.progress_valid_dict[valid_dataset_name].increment_iter(self.infer_mini_batch_size(mini_batch))
+        self.value_logger_valid_dict[valid_dataset_name].update(
+            self.loggable_valid_dict[valid_dataset_name](**{"loss_tensor": loss}, **outs_dict))
+
+        for param in self.value_logger_valid_dict[valid_dataset_name].names:
+            self.writer.add_scalar("validation-{}/{}/iterations".format(valid_dataset_name, param),
+                                   self.value_logger_valid_dict[valid_dataset_name].current_values[param],
+                                   self.progress_valid_dict[valid_dataset_name].iter_total)
+
+    def do_one_training_epoch(self) -> None:
+        start_iter_index = self.progress_train.iter_current_epoch
+        # TODO (#13): Progress bar à la tqdm?
+        for (ind, mini_batch) in enumerate(self.dataloader_train):
+            self.do_one_training_iteration(mini_batch)
+            if self.progress_train.iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
+                self.save_training_states()
+            for param in self.value_logger_train.names:
+                self.writer.add_scalar("training/{}/epochs".format(param),
+                                       self.value_logger_train.average_of_epoch[param],
+                                       self.progress_train.epoch + 1)
+
+            self.print("training | epoch = {:0{}d}/{}\t"
+                       "iter = {:0{}d}/{}\t"
+                       "loss = {:.5f}".format(self.progress_train.epoch + 1,
+                                              int(np.ceil(np.log10(self.config_session.num_epochs))),
+                                              self.config_session.num_epochs,
+                                              self.progress_train.iter_current_epoch,
+                                              int(np.ceil(np.log10(len(self.dataloader_train)))),
+                                              len(self.dataloader_train) + start_iter_index,
+                                              self.value_logger_train.current_values["loss"]))
+
+        self.progress_train.increment_epoch()
+
+    def do_one_validation_epoch(self, valid_dataset_name: str) -> None:
+        start_iter_index = self.progress_valid_dict[valid_dataset_name].iter_current_epoch
+        for (ind, mini_batch) in enumerate(self.dataloader_valid_dict[valid_dataset_name]):
+            self.do_one_validation_iteration(mini_batch, valid_dataset_name)
+            if self.progress_valid_dict[valid_dataset_name].iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
+                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
+
+            for param in self.value_logger_valid_dict[valid_dataset_name].names:
+                self.writer.add_scalar("validation-{}/{}/epochs".format(valid_dataset_name, param),
+                                       self.value_logger_valid_dict[valid_dataset_name].average_of_epoch[param],
+                                       self.progress_valid_dict[valid_dataset_name].epoch + 1)
+
+            self.print("validation-{} | epoch = {:0{}d}/{}\t"
+                       "iter = {:0{}d}/{}\t"
+                       "loss = {:.5f}".format(valid_dataset_name,
+                                              self.progress_valid_dict[valid_dataset_name].epoch + 1,
+                                              int(np.ceil(np.log10(self.config_session.num_epochs))),
+                                              self.config_session.num_epochs,
+                                              self.progress_valid_dict[valid_dataset_name].iter_current_epoch,
+                                              int(np.ceil(
+                                                  np.log10(len(self.dataloader_valid_dict[valid_dataset_name])))),
+                                              len(self.dataloader_valid_dict[valid_dataset_name]) + start_iter_index,
+                                              self.value_logger_valid_dict[valid_dataset_name].current_values["loss"]))
+
+        self.progress_valid_dict[valid_dataset_name].increment_epoch()
+
+    def train(self):
+        start_epoch_index = self.progress_train.epoch
+        model_saved_at_iteration: int | None = None
+
+        for i_epoch in range(start_epoch_index, self.config_session.num_epochs):
+            self.value_logger_train.reset_epoch()
+            self.do_one_training_epoch()
+            self.save_training_states()
+            self.print("\t === averaged over this epoch = {:.5f} === ".format(
+                self.value_logger_train.average_of_epoch["loss"]))
+
+            vote_for_epoch_as_successful: List[bool] = []
+            for ind_set in range(len(self.datasets_valid_dict.names)):
+                self.print("\n")
+                valid_dataset_name = self.datasets_valid_dict.names[ind_set]
+
+                self.value_logger_valid_dict[valid_dataset_name].reset_epoch()
+                self.do_one_validation_epoch(valid_dataset_name)
+                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
+                self.print("\t === averaged over this epoch = {:.5f} === ".format(
+                    self.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"]))
+
+                if not self.datasets_valid_dict.only_for_demo[ind_set]:
+                    best_validation_loss, best_previous_epoch = self.best_validation_loss_dict[valid_dataset_name]
+                    current_epoch_valid_loss = self.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"]
+                    self.print(
+                        ".. Best previous loss for Validation-{}  was {:.5f} "
+                        "(at epoch {}/{}) and is now {:.5f}.".format(valid_dataset_name, best_validation_loss,
+                                                                     best_previous_epoch + 1,
+                                                                     self.config_session.num_epochs,
+                                                                     current_epoch_valid_loss), end=" --> ")
+                    if current_epoch_valid_loss < best_validation_loss:
+                        self.best_validation_loss_dict[valid_dataset_name] = (current_epoch_valid_loss, i_epoch)
+                        self.print("Voting FOR this model.")
+                        vote_for_epoch_as_successful.append(True)
+                    else:
+                        self.print("Voting AGAINST this model.")
+                        vote_for_epoch_as_successful.append(False)
+
+            if all(vote_for_epoch_as_successful):
+                torch.save(self.network.state_dict(), os.path.join(self.writer.log_dir, SAVED_NETWORK_NAME))
+
+                model_saved_at_iteration = i_epoch
+                self.print("SAVED the model at the epoch {}/{} ..".format(
+                    i_epoch + 1, self.config_session.num_epochs))
+            self.print("\n")
+
+        self.print("\nThis is the end of training and validation.")
+        if model_saved_at_iteration is not None:
+            self.print("The best model was saved at iteration {}/{}.".format(model_saved_at_iteration + 1,
+                                                                             self.config_session.num_epochs))
+            # TODO: JIT-compilation of the final saved model.2
+
+        self.writer.close()
+
+    def __call__(self):
+        try:
+            self.train()
+        except BaseException as e:
+            if not os.path.exists(os.path.join(self.run_dir, "states", SAVED_NETWORK_NAME)):
+                shutil.rmtree(self.run_dir)
+                self.print("Removed this run's log-dir altogether, since encountered the exception {}, "
+                           "before any useful state could be saved.".format(type(e).__name__))
+            raise e

@@ -1,34 +1,36 @@
-import torch
-
 from torchbase.session import TrainingBaseSession
 from torchbase.session import SAVED_RNG_NAME
 from torchbase.utils.data import ValidationDatasetsDict, split_iterables
 
+import torch
+from torchvision import transforms
 from datasets import Dataset
+import datasets
 
 import unittest
 
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any, List
 import os
 import random
 import shutil
 import time
 import json
+import inspect
 
 TEST_STORAGE_DIR = os.path.join(os.path.split(os.path.abspath(__file__))[0], "storage")
 os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
 
 
-class ExampleTrainingSessionClass(TrainingBaseSession):
+class ExampleTrainingSessionClassStatic(TrainingBaseSession):
     @staticmethod
     def get_config() -> Dict:
         config = {
             "session": {
                 "device_name": "cpu",
-                "num_epochs": 5,
+                "num_epochs": 1,
                 "mini_batch_size": 4,
-                "learning_rate": 0.001,
-                "weight_decay": 1e-6,
+                "learning_rate": 0.01,
+                "weight_decay": 0.0,
                 "dataloader_num_workers": 0,
             },
             "data": {
@@ -89,8 +91,14 @@ class ExampleTrainingSessionClass(TrainingBaseSession):
 
         return network
 
+    def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
+        pass
 
-class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
+    def loss_function(self, **kwargs: Any) -> torch.Tensor:
+        pass
+
+
+class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         if os.path.exists(os.path.join(TEST_STORAGE_DIR)):
@@ -98,8 +106,8 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
         # TODO: Create a temp folder in memory not disk
 
-        cls.session_fresh_run_fresh_network = ExampleTrainingSessionClass(
-            config=ExampleTrainingSessionClass.get_config(),
+        cls.session_fresh_run_fresh_network = ExampleTrainingSessionClassStatic(
+            config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
             source_run_dir_tag=None
@@ -109,15 +117,15 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
 
         time.sleep(1)  # To avoid creating the same tag again.
 
-        cls.session_existing_run = ExampleTrainingSessionClass(
-            config=ExampleTrainingSessionClass.get_config(),
+        cls.session_existing_run = ExampleTrainingSessionClassStatic(
+            config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=False,
             source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1]
         )
 
-        cls.session_fresh_run_pretrained_network = ExampleTrainingSessionClass(
-            config=ExampleTrainingSessionClass.get_config(),
+        cls.session_fresh_run_pretrained_network = ExampleTrainingSessionClassStatic(
+            config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
             source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1]
@@ -140,6 +148,8 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
             cls.session_fresh_run_fresh_network.optimizer.step()
 
         cls.session_fresh_run_fresh_network.save_network_and_optimizer_states()
+        for valid_dataset_name in cls.session_fresh_run_fresh_network.datasets_valid_dict.names:
+            cls.session_fresh_run_fresh_network.save_progress_and_log_states_for_valid_set(valid_dataset_name)
 
     def test_instantiate_session_with_fresh_run_fresh_network(self):
         self.assertIsNotNone(self.session_fresh_run_fresh_network)
@@ -169,10 +179,10 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
 
     def test_existing_run_dir_but_no_run_tag_specified(self):
         with self.assertRaises(ValueError):
-            ExampleTrainingSessionClass(config=ExampleTrainingSessionClass.get_config(),
-                                        runs_parent_dir=TEST_STORAGE_DIR,
-                                        create_run_dir_afresh=False,
-                                        source_run_dir_tag="Some-non-existing-tag")
+            ExampleTrainingSessionClassStatic(config=ExampleTrainingSessionClassStatic.get_config(),
+                                              runs_parent_dir=TEST_STORAGE_DIR,
+                                              create_run_dir_afresh=False,
+                                              source_run_dir_tag="Some-non-existing-tag")
 
     def test_config_saved_in_run_dir(self):
         run_dir = self.session_fresh_run_fresh_network.run_dir
@@ -187,11 +197,11 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         self.assertEqual(saved_config["metrics"], self.session_fresh_run_fresh_network.config_metrics)
 
     def test_network_init_and_declared_architecture_mismatch(self):
-        wrong_config = ExampleTrainingSessionClass.get_config()
+        wrong_config = ExampleTrainingSessionClassStatic.get_config()
         wrong_config["network"]["architecture"] = "SomeMistakenlyHeldNetworkName"
         with self.assertRaises(TypeError):
             time.sleep(1)  # To avoid creating the same tag again.
-            ExampleTrainingSessionClass(config=wrong_config, runs_parent_dir=TEST_STORAGE_DIR)
+            ExampleTrainingSessionClassStatic(config=wrong_config, runs_parent_dir=TEST_STORAGE_DIR)
 
     def test_network_loading(self):
         network_saved = self.session_fresh_run_fresh_network.network
@@ -221,8 +231,8 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         os.remove(os.path.join(source_session.run_dir, "states", SAVED_RNG_NAME))
         time.sleep(1)  # To avoid creating the same tag again.
         with self.assertRaises(FileNotFoundError):
-            ExampleTrainingSessionClass(
-                config=ExampleTrainingSessionClass.get_config(),
+            ExampleTrainingSessionClassStatic(
+                config=ExampleTrainingSessionClassStatic.get_config(),
                 runs_parent_dir=TEST_STORAGE_DIR,
                 create_run_dir_afresh=False,
                 source_run_dir_tag=os.path.split(source_session.run_dir)[-1]
@@ -241,6 +251,211 @@ class TrainingBaseSessionInitializationUnitTest(unittest.TestCase):
         mini_batch = next(iter(dataloader))
         self.assertEqual(mini_batch["inputs"].shape[0], self.session_existing_run.config_session.mini_batch_size)
         self.assertEqual(mini_batch["labels"].shape[0], self.session_existing_run.config_session.mini_batch_size)
+
+
+class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
+    @staticmethod
+    def get_config() -> Dict:
+        config = {
+            "session": {
+                "device_name": "cpu",
+                "num_epochs": 5,
+                "mini_batch_size": 6,
+                "learning_rate": 0.01,
+                "weight_decay": 1e-6,
+                "dataloader_num_workers": 0,
+            },
+            "data": {
+                "num_samples": 20,
+                "image_size": (32, 32),
+                "split_portions": (0.8, 0.2)
+            },
+            "metrics": {},
+            "network": {
+                "architecture": "SomeSimpleCNN",
+                "num_ch": 2
+            }
+        }
+
+        return config
+
+    def init_datasets(self) -> Tuple[Dataset, ValidationDatasetsDict]:
+        def generate_random_data_for_test(num_samples: int, image_size: Tuple[int, int]) -> Dict[str, List]:
+            data = {"image": [], "image_noisy": []}
+
+            for _ in range(num_samples):
+                image = torch.zeros(3, *image_size)
+                num_rectangles = random.randint(0, 3)
+                for _ in range(num_rectangles):
+                    x1, y1 = torch.randint(0, image_size[0] // 2, (2,))
+                    x2, y2 = torch.randint(image_size[0] // 2, image_size[0], (2,))
+                    color = torch.rand(3)
+
+                    image[:, x1:x2, y1:y2] = color.unsqueeze(1).unsqueeze(2)
+
+                noise = torch.randn_like(image) * 0.2
+                image_noisy = torch.clamp(image + noise, 0, 1)
+
+                data["image"].append(image)
+                data["image_noisy"].append(image_noisy)
+
+            return data
+
+        def augment(item: Dict) -> Dict:
+            rotation = transforms.RandomRotation(degrees=(-30, 30))  # Rotate between -30 and 30 degrees
+
+            image = torch.tensor(item["image"])
+            image_noisy = torch.tensor(item["image_noisy"])
+
+            item["image"] = rotation(image)
+            item["image_noisy"] = rotation(image_noisy)
+
+            return item
+
+        data_train, data_valid = split_iterables(generate_random_data_for_test(
+            num_samples=self.config_data["num_samples"], image_size=self.config_data["image_size"]),
+            portions=self.config_data["split_portions"],
+            shuffle=True)
+
+        dataset_train_without_augmentation = Dataset.from_dict(data_train)
+        dataset_train_with_augmentation = Dataset.from_dict(data_train).map(lambda x: augment(x))
+        dataset_valid_without_augmentation = Dataset.from_dict(data_valid)
+        dataset_valid_with_augmentation = Dataset.from_dict(data_valid).map(augment)
+
+        return (dataset_train_with_augmentation,
+                ValidationDatasetsDict(
+                    datasets=(dataset_train_without_augmentation,
+                              dataset_valid_with_augmentation,
+                              dataset_valid_without_augmentation),
+                    only_for_demo=(True, False, False),
+                    names=("train-no-aug", "valid-with-aug", "valid-no-aug")
+                ))
+
+    def init_network(self) -> torch.nn.Module:
+        class SomeSimpleCNN(torch.nn.Module):
+            def __init__(self, num_ch: int):
+                super().__init__()
+                self.conv1 = torch.nn.Conv2d(3, num_ch, 3, padding=1)
+                self.conv2 = torch.nn.Conv2d(num_ch, num_ch, 3, padding=1)
+                self.conv3 = torch.nn.Conv2d(num_ch, 3, 3, padding=1)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                x = self.conv1(x)
+                x = torch.nn.ReLU()(x)
+                x = self.conv2(x)
+                x = torch.nn.ReLU()(x)
+                x = self.conv3(x)
+
+                return x
+
+        network = SomeSimpleCNN(num_ch=self.config_network["num_ch"])
+
+        return network
+
+    def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
+        input_image = mini_batch["image_noisy"].to(self.device)
+        target_image = mini_batch["image"].to(self.device)
+
+        output_image = self.network(input_image)
+
+        return {"output": output_image, "target": target_image}
+
+    def loss_function(self, *, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        criterion = torch.nn.BCEWithLogitsLoss()
+
+        return criterion(output, target)
+
+
+class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        if os.path.exists(os.path.join(TEST_STORAGE_DIR)):
+            shutil.rmtree(os.path.join(TEST_STORAGE_DIR))
+        os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
+        # TODO: Create a temp folder in memory not disk
+
+        cls.session = ExampleTrainingSessionClassDynamic(
+            config=ExampleTrainingSessionClassDynamic.get_config(),
+            runs_parent_dir=TEST_STORAGE_DIR,
+            tag_postfix="dynamic"
+        )
+
+    @classmethod
+    def tearDown(cls) -> None:
+        cls.session.writer.close()
+
+    def test_forward_and_loss_functions(self):
+        self.assertIn("loss", self.session.value_logger_train.names)
+        mini_batch = next(iter(self.session.dataloader_train))
+        outs = self.session.forward_pass(mini_batch)
+
+        sig = inspect.signature(self.session.loss_function)
+        outs_for_loss = {k: v for k, v in outs.items() if k in sig.parameters}
+        loss_tensor = self.session.loss_function(**outs_for_loss)
+
+        self.assertIsInstance(loss_tensor, torch.Tensor)
+        self.assertTrue(loss_tensor.requires_grad)
+        self.assertIsInstance(self.session.get_loss_value(loss_tensor=loss_tensor), float)
+
+    def test_infer_mini_batch_size(self):
+        for mini_batch in self.session.dataloader_train:
+            inferred_mini_batch_size = self.session.infer_mini_batch_size(mini_batch)
+            self.assertLessEqual(inferred_mini_batch_size, self.session.config_session.mini_batch_size)
+
+    def test_do_one_training_iteration(self):
+        self.assertEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
+        self.assertEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 0)
+        self.assertEqual(self.session.progress_train.epoch, 0)
+
+        mini_batch = next(iter(self.session.dataloader_train))
+        self.session.do_one_training_iteration(mini_batch)
+
+        self.assertTrue(self.session.network.training)
+        self.assertNotEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
+        self.assertEqual(self.session.value_logger_train.average_overall["loss"],
+                         self.session.value_logger_train.average_of_epoch["loss"])
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 1)
+        self.assertEqual(self.session.progress_train.epoch, 0)
+
+        self.session.value_logger_train.reset()
+
+    def test_do_one_validation_iteration(self):
+        for valid_dataset_name in self.session.datasets_valid_dict.names:
+            mini_batch = next(iter(self.session.dataloader_valid_dict[valid_dataset_name]))
+            self.session.do_one_validation_iteration(mini_batch, valid_dataset_name)
+            self.assertFalse(self.session.network.training)
+            self.assertNotEqual(self.session.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"],
+                                0.0)
+
+            self.session.value_logger_valid_dict[valid_dataset_name].reset()
+
+    def test_do_one_training_epoch(self):
+        self.assertEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
+        self.assertEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 0)
+        self.assertEqual(self.session.progress_train.epoch, 0)
+
+        self.session.do_one_training_epoch()
+
+        self.assertNotEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 0)
+        self.assertEqual(self.session.progress_train.epoch, 1)
+
+        self.session.value_logger_train.reset()
+
+    def test_do_one_validation_epoch(self):
+        for valid_dataset_name in self.session.datasets_valid_dict.names:
+            self.session.do_one_validation_epoch(valid_dataset_name)
+
+            self.assertNotEqual(self.session.value_logger_valid_dict[valid_dataset_name].average_overall["loss"], 0.0)
+            self.assertEqual(self.session.progress_valid_dict[valid_dataset_name].iter_current_epoch, 0)
+            self.assertEqual(self.session.progress_valid_dict[valid_dataset_name].epoch, 1)
+
+            self.session.value_logger_valid_dict[valid_dataset_name].reset()
+
+    def test_do_training(self):
+        self.session.train()
 
 
 if __name__ == "__main__":

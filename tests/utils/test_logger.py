@@ -1,5 +1,6 @@
 from torchbase.utils.logger import ProgressManager
 from torchbase.utils.logger import ValuesLogger
+from torchbase.utils.logger import LoggableParams
 
 import unittest
 
@@ -129,6 +130,63 @@ class ProgressAndValuesLoggerTest(unittest.TestCase):
         self.assertEqual(loaded_values_logger.average_of_epoch['accuracy'], 0.85)
         self.assertEqual(loaded_values_logger.average_overall['loss'], 0.25)
         self.assertEqual(loaded_values_logger.average_overall['accuracy'], 0.85)
+
+
+class LoggableParamsUnitTest(unittest.TestCase):
+    def setUp(self):
+        def loss_func(*, x):
+            return x * 0.5
+
+        def accuracy_func(*, x):
+            return x * 0.1
+
+        self.functional_dict = {
+            'loss': loss_func,
+            'accuracy': accuracy_func
+        }
+        self.loggable_params = LoggableParams(functional_dict=self.functional_dict)
+
+    def test_initialization(self):
+        self.assertTrue(callable(self.loggable_params.loss))
+        self.assertTrue(callable(self.loggable_params.accuracy))
+
+    def test_evaluate_functionals(self):
+        results = self.loggable_params.evaluate_functionals(x=50)
+        self.assertEqual(results['loss'], 25)
+        self.assertEqual(results['accuracy'], 5)
+
+    def test_add_functional(self):
+        def precision_func(*, x):
+            return x * 0.2
+
+        self.loggable_params.add_functional('precision', precision_func)
+        self.assertTrue(hasattr(self.loggable_params, 'precision'))
+        self.assertEqual(self.loggable_params.precision(x=10), 2)
+
+    def test_evaluate_functionals_with_missing_required_arguments(self):
+        with self.assertRaises(TypeError):
+            self.loggable_params()
+
+    def test_add_existing_functional(self):
+        def dummy_func(*, x):
+            return x
+
+        with self.assertRaises(AttributeError):
+            self.loggable_params.add_functional('loss', dummy_func)
+
+    def test_add_non_callable(self):
+        with self.assertRaises(TypeError):
+            self.loggable_params.add_functional('new_param', 123)
+
+    def test_evaluate_functionals_with_invalid_result_type(self):
+        def non_float_func(*, x):
+            return 'non_float_result'
+
+        self.loggable_params.add_functional('non_float', non_float_func)
+
+        with self.assertRaises(ValueError) as context:
+            self.loggable_params(x=2)
+        self.assertIn('Expected the result of `non_float` to be a float', str(context.exception))
 
 
 if __name__ == '__main__':

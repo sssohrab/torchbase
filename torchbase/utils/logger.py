@@ -1,7 +1,8 @@
 from dataclasses import dataclass, fields, asdict
 
-from typing import List, Dict
+from typing import List, Dict, Any, Callable
 
+import inspect
 import json
 
 
@@ -116,3 +117,49 @@ class ValuesLogger:
         self.current_values = dict_data["current_values"]
         self.average_of_epoch = dict_data["average_of_epoch"]
         self.average_overall = dict_data["average_overall"]
+
+
+class LoggableParams:
+    def __init__(self, functional_dict: Dict[str, Callable[..., Any]]):
+        if not isinstance(functional_dict, dict):
+            raise TypeError("The passed `functional_dict` should be a dictionary with string keys and callable values.")
+
+        for name, functional in functional_dict.items():
+            self.add_functional(name, functional)
+
+    def add_functional(self, name: str, functional: Callable) -> None:
+        if not isinstance(name, str):
+            raise TypeError("The `associated` to the functional should be a string.")
+        if not callable(functional):
+            raise TypeError("The `functional` should be a callable.")
+        sig = inspect.signature(functional)
+
+        for param in sig.parameters.values():
+            if param.kind not in [inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.VAR_KEYWORD]:
+                raise TypeError(f"Functional `{name}` must have keyword-only arguments.")
+
+        if hasattr(self, name):
+            raise AttributeError("The attribute `{}` already exists.".format(name))
+        setattr(self, name, functional)
+
+    def get_functional_dict(self) -> Dict[str, Callable[..., Any]]:
+        return {name: functional for name, functional in self.__dict__.items() if callable(functional)}
+
+    def get_names(self) -> List[str]:
+        return list(self.get_functional_dict().keys())
+
+    def evaluate_functionals(self, **kwargs) -> Dict[str, float]:
+        values_dict = {}
+        for name, functional in self.get_functional_dict().items():
+            sig = inspect.signature(functional)
+            func_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+            result = functional(**func_kwargs)
+            if not isinstance(result, float):
+                raise ValueError("Expected the result of `{}` to be a float, got {} instead.".format(
+                    name, type(result).__name__))
+            values_dict[name] = result
+
+        return values_dict
+
+    def __call__(self, **kwargs) -> Dict[str, float]:
+        return self.evaluate_functionals(**kwargs)
