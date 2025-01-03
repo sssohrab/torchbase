@@ -67,7 +67,7 @@ class TrainingBaseSession(ABC):
                                              progress_manager=self.progress_valid_dict[valid_dataset_name]) for
             valid_dataset_name in self.datasets_valid_dict.names}
 
-        self.best_validation_loss_dict: Dict[str, Tuple[float, int]] = {}
+        self.best_validation_loss_dict = self.init_or_load_best_validation_loss_dict(create_run_dir_afresh)
 
     @staticmethod
     def print(report: str, end: str | None = None) -> None:
@@ -146,14 +146,22 @@ class TrainingBaseSession(ABC):
             raise FileNotFoundError("The optimizer `states_dict` file does not exist in the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
 
-    def init_best_validation_loss_dict(self) -> Dict[str, Tuple[float, int]]:
-        best_validation_loss_dict = {
-            self.datasets_valid_dict.names[ind]: (float("inf"), -2) for
-            ind in range(len(self.datasets_valid_dict.names)) if not self.datasets_valid_dict.only_for_demo[ind]}
+    def init_or_load_best_validation_loss_dict(self, create_run_dir_afresh: bool) -> Dict[str, Tuple[float, int]]:
+        if create_run_dir_afresh:
+            best_validation_loss_dict = {
+                self.datasets_valid_dict.names[ind]: (float("inf"), -2) for
+                ind in range(len(self.datasets_valid_dict.names)) if not self.datasets_valid_dict.only_for_demo[ind]}
 
-        return best_validation_loss_dict
+            return best_validation_loss_dict
+        else:
+            states_dir_path = os.path.join(self.run_dir, "states")
+            with open(os.path.join(states_dir_path, "best_validation_loss_dict.json"), "r") as f:
+                best_validation_loss_dict = json.load(f)
 
-    def configure_states_dir_and_randomness_sources(self, run_dir: str, create_run_dir_afresh: bool) -> None:
+            return best_validation_loss_dict
+
+    @staticmethod
+    def configure_states_dir_and_randomness_sources(run_dir: str, create_run_dir_afresh: bool) -> None:
         states_dir = os.path.join(run_dir, "states")
 
         if create_run_dir_afresh:
@@ -162,8 +170,6 @@ class TrainingBaseSession(ABC):
                         "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
                         "numpy_rng_state": np.random.get_state(),
                         "random_rng_state": random.getstate()}, os.path.join(states_dir, SAVED_RNG_NAME))
-
-            self.best_validation_loss_dict = self.init_best_validation_loss_dict()
 
         else:
             TrainingBaseSession.check_source_states_dir_is_valid(states_dir)
@@ -174,9 +180,6 @@ class TrainingBaseSession(ABC):
                 torch.cuda.set_rng_state(rng_states["cuda_rng_state"])
             np.random.set_state(rng_states["numpy_rng_state"])
             random.setstate(rng_states["random_rng_state"])
-
-            with open(os.path.join(states_dir, "best_validation_loss_dict.json"), "r") as f:
-                self.best_validation_loss_dict = json.load(f)
 
     def save_config_to_run_dir(self, create_run_dir_afresh: bool) -> None:
         config = {
