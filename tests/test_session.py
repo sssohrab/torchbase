@@ -261,7 +261,7 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
                 "device_name": "cpu",
                 "num_epochs": 5,
                 "mini_batch_size": 6,
-                "learning_rate": 0.001,
+                "learning_rate": 0.01,
                 "weight_decay": 1e-6,
                 "dataloader_num_workers": 0,
             },
@@ -453,6 +453,9 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
             self.assertEqual(self.session.progress_valid_dict[valid_dataset_name].epoch, 1)
 
             self.session.value_logger_valid_dict[valid_dataset_name].reset()
+
+    def test_do_training(self):
+        self.session.train()
 
 
 if __name__ == "__main__":

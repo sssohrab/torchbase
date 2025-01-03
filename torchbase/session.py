@@ -434,3 +434,58 @@ class TrainingBaseSession(ABC):
                                               self.value_logger_valid_dict[valid_dataset_name].current_values["loss"]))
 
         self.progress_valid_dict[valid_dataset_name].increment_epoch()
+
+    def train(self):
+        start_epoch_index = self.progress_train.epoch
+        model_saved_at_iteration: int | None = None
+
+        for i_epoch in range(start_epoch_index, self.config_session.num_epochs):
+            self.value_logger_train.reset_epoch()
+            self.do_one_training_epoch()
+            self.save_training_states()
+            self.print("\t === averaged over this epoch = {:.5f} === ".format(
+                self.value_logger_train.average_of_epoch["loss"]))
+
+            vote_for_epoch_as_successful: List[bool] = []
+            for ind_set in range(len(self.datasets_valid_dict.names)):
+                self.print("\n")
+                valid_dataset_name = self.datasets_valid_dict.names[ind_set]
+
+                self.value_logger_valid_dict[valid_dataset_name].reset_epoch()
+                self.do_one_validation_epoch(valid_dataset_name)
+                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
+                self.print("\t === averaged over this epoch = {:.5f} === ".format(
+                    self.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"]))
+
+                if not self.datasets_valid_dict.only_for_demo[ind_set]:
+                    best_validation_loss, best_previous_epoch = self.best_validation_loss_dict[valid_dataset_name]
+                    current_epoch_valid_loss = self.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"]
+                    self.print(
+                        ".. Best previous loss for Validation-{}  was {:.5f} "
+                        "(at epoch {}/{}) and is now {:.5f}.".format(valid_dataset_name, best_validation_loss,
+                                                                     best_previous_epoch + 1,
+                                                                     self.config_session.num_epochs,
+                                                                     current_epoch_valid_loss), end=" --> ")
+                    if current_epoch_valid_loss < best_validation_loss:
+                        self.best_validation_loss_dict[valid_dataset_name] = (current_epoch_valid_loss, i_epoch)
+                        self.print("Voting FOR this model.")
+                        vote_for_epoch_as_successful.append(True)
+                    else:
+                        self.print("Voting AGAINST this model.")
+                        vote_for_epoch_as_successful.append(False)
+
+            if all(vote_for_epoch_as_successful):
+                torch.save(self.network.state_dict(), os.path.join(self.writer.log_dir, SAVED_NETWORK_NAME))
+
+                model_saved_at_iteration = i_epoch
+                self.print("SAVED the model at the epoch {}/{} ..".format(
+                    i_epoch + 1, self.config_session.num_epochs))
+            self.print("\n")
+
+        self.print("\nThis is the end of training and validation.")
+        if model_saved_at_iteration is not None:
+            self.print("The best model was saved at iteration {}/{}.".format(model_saved_at_iteration + 1,
+                                                                             self.config_session.num_epochs))
+            # TODO: JIT-compilation of the final saved model.2
+
+        self.writer.close()
