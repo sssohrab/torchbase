@@ -430,6 +430,30 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
 
             self.session.value_logger_valid_dict[valid_dataset_name].reset()
 
+    def test_do_one_training_epoch(self):
+        self.assertEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
+        self.assertEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 0)
+        self.assertEqual(self.session.progress_train.epoch, 0)
+
+        self.session.do_one_training_epoch()
+
+        self.assertNotEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
+        self.assertEqual(self.session.progress_train.iter_current_epoch, 0)
+        self.assertEqual(self.session.progress_train.epoch, 1)
+
+        self.session.value_logger_train.reset()
+
+    def test_do_one_validation_epoch(self):
+        for valid_dataset_name in self.session.datasets_valid_dict.names:
+            self.session.do_one_validation_epoch(valid_dataset_name)
+
+            self.assertNotEqual(self.session.value_logger_valid_dict[valid_dataset_name].average_overall["loss"], 0.0)
+            self.assertEqual(self.session.progress_valid_dict[valid_dataset_name].iter_current_epoch, 0)
+            self.assertEqual(self.session.progress_valid_dict[valid_dataset_name].epoch, 1)
+
+            self.session.value_logger_valid_dict[valid_dataset_name].reset()
+
 
 if __name__ == "__main__":
     unittest.main()
