@@ -15,6 +15,7 @@ import random
 import shutil
 import time
 import json
+import inspect
 
 TEST_STORAGE_DIR = os.path.join(os.path.split(os.path.abspath(__file__))[0], "storage")
 os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
@@ -269,7 +270,7 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
             },
             "metrics": {},
             "network": {
-                "architecture": "SomeExampleNet",
+                "architecture": "SomeSimpleCNN",
                 "num_ch": 2
             }
         }
@@ -305,7 +306,7 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
             image_noisy = torch.tensor(item["image_noisy"])
 
             item["image"] = rotation(image)
-            item["noisy_image"] = rotation(image_noisy)
+            item["image_noisy"] = rotation(image_noisy)
 
             return item
 
@@ -329,28 +330,38 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
                 ))
 
     def init_network(self) -> torch.nn.Module:
-        class SomeExampleNet(torch.nn.Module):
+        class SomeSimpleCNN(torch.nn.Module):
             def __init__(self, num_ch: int):
                 super().__init__()
-                self.conv1 = torch.nn.Conv2d(1, num_ch, 3, padding=1)
-                self.conv2 = torch.nn.Conv2d(num_ch, 1, 3, padding=1)
+                self.conv1 = torch.nn.Conv2d(3, num_ch, 3, padding=1)
+                self.conv2 = torch.nn.Conv2d(num_ch, num_ch, 3, padding=1)
+                self.conv3 = torch.nn.Conv2d(num_ch, 3, 3, padding=1)
 
             def forward(self, x: torch.Tensor) -> torch.Tensor:
                 x = self.conv1(x)
                 x = torch.nn.ReLU()(x)
                 x = self.conv2(x)
+                x = torch.nn.ReLU()(x)
+                x = self.conv3(x)
 
                 return x
 
-        network = SomeExampleNet(num_ch=self.config_network["num_ch"])
+        network = SomeSimpleCNN(num_ch=self.config_network["num_ch"])
 
         return network
 
     def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
-        pass
+        input_image = mini_batch["image_noisy"].to(self.device)
+        target_image = mini_batch["image"].to(self.device)
 
-    def loss_function(self, **kwargs: Any) -> torch.Tensor:
-        pass
+        output_image = self.network(input_image)
+
+        return {"output": output_image, "target": target_image}
+
+    def loss_function(self, *, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        criterion = torch.nn.BCEWithLogitsLoss()
+
+        return criterion(output, target)
 
 
 class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
@@ -372,8 +383,17 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
         cls.session.writer.close()
 
     def test_forward_and_loss_functions(self):
-        # TODO
-        pass
+        self.assertIn("loss", self.session.value_logger_train.names)
+        mini_batch = next(iter(self.session.dataloader_train))
+        outs = self.session.forward_pass(mini_batch)
+
+        sig = inspect.signature(self.session.loss_function)
+        outs_for_loss = {k: v for k, v in outs.items() if k in sig.parameters}
+        loss_tensor = self.session.loss_function(**outs_for_loss)
+
+        self.assertIsInstance(loss_tensor, torch.Tensor)
+        self.assertTrue(loss_tensor.requires_grad)
+        self.assertIsInstance(self.session.get_loss_value(loss_tensor=loss_tensor), float)
 
     def test_infer_mini_batch_size(self):
         for mini_batch in self.session.dataloader_train:
