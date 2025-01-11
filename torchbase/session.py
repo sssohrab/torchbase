@@ -1,5 +1,6 @@
 from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
 from torchbase.utils.data import ValidationDatasetsDict
+from torchbase.utils.metrics import BaseMetricsClass
 from torchbase.utils.networks import load_network_from_state_dict_to_device
 from torchbase.utils.logger import ProgressManager, ValuesLogger, LoggableParams
 
@@ -54,14 +55,18 @@ class TrainingBaseSession(ABC):
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
 
+        self.config_metrics = config["metrics"]
+        metrics_classes = self.init_metrics()
+        self.metrics_functionals_dict = self.get_metrics_functionals_dict_from_metrics_classes(metrics_classes)
+
         self.progress_train = ProgressManager()
-        self.loggable_train = LoggableParams({"loss": self.get_loss_value})
+        self.loggable_train = LoggableParams({**{"loss": self.get_loss_value}, **self.metrics_functionals_dict})
         self.value_logger_train = ValuesLogger(self.loggable_train.get_names(), progress_manager=self.progress_train)
 
         self.progress_valid_dict = {valid_dataset_name: ProgressManager() for valid_dataset_name in
                                     self.datasets_valid_dict.names}
         self.loggable_valid_dict = {
-            valid_dataset_name: LoggableParams({"loss": self.get_loss_value})
+            valid_dataset_name: LoggableParams({**{"loss": self.get_loss_value}, **self.metrics_functionals_dict})
             for valid_dataset_name in self.datasets_valid_dict.names}
         self.value_logger_valid_dict = {
             valid_dataset_name: ValuesLogger(self.loggable_train.get_names(),
@@ -288,6 +293,44 @@ class TrainingBaseSession(ABC):
         # Optimizer states loaded only for fresh run, but network states loaded anyway (if source run is specified).
         self.optimizer.load_state_dict(
             torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME), weights_only=True))
+
+    @abstractmethod
+    def init_metrics(self) -> List[BaseMetricsClass] | None:
+        pass
+
+    def get_metrics_functionals_dict_from_metrics_classes(self,
+                                                          metrics_classes:
+                                                          List[BaseMetricsClass] | None) -> (
+            Dict[str, Callable[..., Any]] | Dict[None, None]):
+        if metrics_classes is None:
+            return {}
+
+        if not isinstance(metrics_classes, list) or not all(
+                [isinstance(metrics_class, BaseMetricsClass) for metrics_class in metrics_classes]):
+            raise TypeError(
+                "The abstract `init_metrics_module` should implement a list of valid `BaseMetricsClass` instances.")
+
+        if set(self.config_metrics.keys()) != set([_class.__class__.__name__ for _class in metrics_classes]):
+            raise ValueError("The requested set of metrics classes from the metrics config does not match the "
+                             "implemented metrics classes within the abstract `init_metrics_module` method.")
+
+        metrics_functionals_dict: Dict[str, Callable[..., Any]] = {}
+        for metrics_class in metrics_classes:
+            requested_metrics_list = self.config_metrics[metrics_class.__class__.__name__]
+            implemented_metrics = metrics_class.get_all_metric_functionals_dict()
+            for metric in requested_metrics_list:
+                if metric not in implemented_metrics:
+                    raise ValueError("The metrics config requested to use `{}`, which is not available in the"
+                                     "set of metrics implemented at `{}`".format(metric, metrics_class.__name__))
+
+            if len(requested_metrics_list) > 0:
+                _metrics_functionals_dict = metrics_class.get_metrics(requested_metrics_list)
+                if set(metrics_functionals_dict.keys()) & set(_metrics_functionals_dict):
+                    raise ValueError(
+                        "Duplicate keys found across the metrics from different `BaseMetricsClass` instances.")
+                metrics_functionals_dict = {**metrics_functionals_dict, **_metrics_functionals_dict}
+
+        return metrics_functionals_dict
 
     def save_training_states(self) -> None:
         states_dir_path = os.path.join(self.run_dir, "states")

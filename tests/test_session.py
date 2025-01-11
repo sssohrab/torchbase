@@ -2,6 +2,9 @@ from torchbase.session import TrainingBaseSession
 from torchbase.session import SAVED_RNG_NAME
 from torchbase.utils.data import ValidationDatasetsDict, split_iterables
 
+from torchbase.utils.metrics import BaseMetricsClass
+from torchbase.utils.metrics_instances import BinaryClassificationMetrics, ImageReconstructionMetrics
+
 import torch
 from torchvision import transforms
 from datasets import Dataset
@@ -95,6 +98,9 @@ class ExampleTrainingSessionClassStatic(TrainingBaseSession):
         pass
 
     def loss_function(self, **kwargs: Any) -> torch.Tensor:
+        pass
+
+    def init_metrics(self) -> List[BaseMetricsClass] | None:
         pass
 
 
@@ -259,7 +265,7 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
         config = {
             "session": {
                 "device_name": "cpu",
-                "num_epochs": 5,
+                "num_epochs": 10,
                 "mini_batch_size": 6,
                 "learning_rate": 0.01,
                 "weight_decay": 1e-6,
@@ -270,7 +276,14 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
                 "image_size": (32, 32),
                 "split_portions": (0.8, 0.2)
             },
-            "metrics": {},
+            "metrics": {
+                "BinaryClassificationMetrics": [
+                    "precision_micro", "recall_micro", "f1_score_micro"
+                ],
+                "ImageReconstructionMetrics": [
+                    "psnr"
+                ]
+            },
             "network": {
                 "architecture": "SomeSimpleCNN",
                 "num_ch": 2
@@ -358,12 +371,26 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
 
         output_image = self.network(input_image)
 
-        return {"output": output_image, "target": target_image}
+        return {"output": output_image, "target": target_image,
+                "gt_for_metrics": target_image.sigmoid().round(), "predictions_for_metrics": output_image.sigmoid()}
 
     def loss_function(self, *, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         criterion = torch.nn.BCEWithLogitsLoss()
 
         return criterion(output, target)
+
+    def init_metrics(self) -> List[BaseMetricsClass] | None:
+        metrics_class_binary_classification = BinaryClassificationMetrics(keyword_maps={
+            "gt_for_metrics": "binary_ground_truth",
+            "predictions_for_metrics": "prediction_probabilities"})
+
+        metrics_class_image_reconstruction = ImageReconstructionMetrics(keyword_maps={
+            "gt_for_metrics": "target_image",
+            "predictions_for_metrics": "output_image"
+        })
+
+        metrics_classes_list = [metrics_class_binary_classification, metrics_class_image_reconstruction]
+        return metrics_classes_list
 
 
 class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
