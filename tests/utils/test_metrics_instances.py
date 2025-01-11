@@ -1,6 +1,7 @@
 import unittest
 from torchbase.utils.metrics_instances import BinaryClassificationMetrics
 from torchbase.utils.metrics_instances import ImageReconstructionMetrics
+from torchbase.utils.metrics_instances import ImageSegmentationMetrics
 
 import numpy as np
 import torch
@@ -83,6 +84,41 @@ class ImageReconstructionMetricsUnitTest(unittest.TestCase):
 
         self.assertAlmostEqual(metrics["mse_normalized"],
                                (noise_mean ** 2 + noise_var) / (signal_mean ** 2 + signal_var))
+
+
+class ImageSegmentationMetricsUnitTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.metrics = ImageSegmentationMetrics()
+
+    def test_perfect_match(self):
+        target = torch.tensor([[True, True], [False, False]], dtype=torch.bool)
+        output = torch.tensor([[True, True], [False, False]], dtype=torch.bool)
+
+        self.assertAlmostEqual(self.metrics.dice_score(target_binary_image=target, output_binary_image=output),
+                               1.0, places=5)
+        self.assertAlmostEqual(self.metrics.iou_score(target_binary_image=target, output_binary_image=output),
+                               1.0, places=5)
+
+    def test_no_overlap(self):
+        target = torch.tensor([[True, True], [True, True]], dtype=torch.bool)
+        output = torch.tensor([[False, False], [False, False]], dtype=torch.bool)
+
+        self.assertAlmostEqual(self.metrics.dice_score(target_binary_image=target, output_binary_image=output), 0.0)
+        self.assertAlmostEqual(self.metrics.iou_score(target_binary_image=target, output_binary_image=output), 0.0)
+
+    def test_partial_overlap(self):
+        target = torch.tensor([[True, False], [False, True]], dtype=torch.bool)
+        output = torch.tensor([[True, True], [False, False]], dtype=torch.bool)
+
+        intersection = 1.0
+        union = 3.0
+        dice_expected = (2 * intersection) / (2 + 2)
+        iou_expected = intersection / union
+
+        self.assertAlmostEqual(self.metrics.dice_score(target_binary_image=target, output_binary_image=output),
+                               dice_expected, places=5)
+        self.assertAlmostEqual(self.metrics.iou_score(target_binary_image=target, output_binary_image=output),
+                               iou_expected, places=5)
 
 
 if __name__ == '__main__':

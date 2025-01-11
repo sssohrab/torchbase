@@ -150,3 +150,43 @@ class ImageReconstructionMetrics(BaseMetricsClass):
         psnr = 10 * torch.log10(self.EXPECTED_MAX_PIXEL_VALUE ** 2 / mse).item()
 
         return psnr
+
+
+class ImageSegmentationMetrics(BaseMetricsClass):
+    EPS = 1e-6
+
+    @staticmethod
+    def _check_inputs(*, target_binary_image: torch.Tensor,
+                      output_binary_image: torch.Tensor) -> None:
+
+        assert isinstance(target_binary_image, torch.Tensor) and isinstance(output_binary_image, torch.Tensor), (
+            "Both `target_binary_image` and `output_binary_image` should be `torch.Tensor` instances.")
+
+        assert target_binary_image.dtype == torch.bool and output_binary_image.dtype == torch.bool, (
+                "Both `target_binary_image` and `output_binary_image` should be binary tensors.")
+
+        assert target_binary_image.shape == output_binary_image.shape, (
+            "Both `target_image` and `output_image` should have the same shapes.")
+
+    def dice_score(self, *, target_binary_image: torch.Tensor,
+                   output_binary_image: torch.Tensor) -> float:
+        self._check_inputs(target_binary_image=target_binary_image, output_binary_image=output_binary_image)
+
+        intersection = (
+                target_binary_image & output_binary_image).sum().float()  # true positives (1s in both masks)
+        target_sum = target_binary_image.sum().float()
+        output_sum = output_binary_image.sum().float()
+
+        dice = (2.0 * intersection) / (target_sum + output_sum + self.EPS)
+
+        return dice.item()
+
+    def iou_score(self, *, target_binary_image: torch.Tensor,
+                  output_binary_image: torch.Tensor) -> float:
+        self._check_inputs(target_binary_image=target_binary_image, output_binary_image=output_binary_image)
+
+        intersection = (target_binary_image & output_binary_image).sum().float()
+        union = (target_binary_image | output_binary_image).sum().float()
+
+        iou = intersection / (union + self.EPS)
+        return iou.item()
