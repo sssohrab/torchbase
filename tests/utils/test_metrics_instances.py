@@ -1,5 +1,6 @@
 import unittest
 from torchbase.utils.metrics_instances import BinaryClassificationMetrics
+from torchbase.utils.metrics_instances import ImageReconstructionMetrics
 
 import numpy as np
 import torch
@@ -62,6 +63,26 @@ class BinaryClassificationMetricsUnitTest(unittest.TestCase):
 
         with self.assertRaises(AssertionError):
             self.metric_calculator.pr_auc(binary_ground_truth=ground_truth, prediction_probabilities=predictions)
+
+
+class ImageReconstructionMetricsUnitTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.metric_calculator = ImageReconstructionMetrics()
+        self.target_image = torch.rand(4, 2, 64, 64)
+        self.noise = torch.rand_like(self.target_image) * 0.1
+        self.output_image = self.target_image + self.noise
+
+    def test_typical_usecase(self):
+        metrics = {name: value(target_image=self.target_image, output_image=self.output_image)
+                   for name, value in self.metric_calculator.get_all_metric_functionals_dict().items()}
+
+        noise_var = self.noise.var().item()
+        noise_mean = self.noise.mean().item()
+        signal_var = self.target_image.var().item()
+        signal_mean = self.target_image.mean().item()
+
+        self.assertAlmostEqual(metrics["mse_normalized"],
+                               (noise_mean ** 2 + noise_var) / (signal_mean ** 2 + signal_var))
 
 
 if __name__ == '__main__':

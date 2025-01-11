@@ -114,3 +114,39 @@ class BinaryClassificationMetrics(BaseMetricsClass):
         value = metrics.average_precision_score(y_true=binary_ground_truth, y_score=prediction_probabilities)
 
         return value
+
+
+class ImageReconstructionMetrics(BaseMetricsClass):
+    EPS = 1e-9
+    EXPECTED_MAX_PIXEL_VALUE = 1.0
+
+    def _check_inputs(self, *, target_image: torch.Tensor,
+                      output_image: torch.Tensor) -> None:
+
+        assert isinstance(target_image, torch.Tensor) and isinstance(output_image, torch.Tensor), (
+            "Both `target_image` and `output_image` should be `torch.Tensor` instances.")
+
+        assert target_image.dtype == torch.float and output_image.dtype == torch.float, (
+            "Both `target_image` and `output_image` should be tensors of floats (supposedly between 0 and {}).".format(
+                self.EXPECTED_MAX_PIXEL_VALUE))
+
+        assert target_image.shape == output_image.shape, (
+            "Both `target_image` and `output_image` should have the same shapes.")
+
+    def mse_normalized(self, *, target_image: torch.Tensor, output_image: torch.Tensor) -> float:
+        self._check_inputs(target_image=target_image, output_image=output_image)
+
+        mse = torch.nn.functional.mse_loss(target_image, output_image, reduction="mean").item()
+        norm = torch.nn.functional.mse_loss(target_image, torch.zeros_like(target_image), reduction="mean").item()
+
+        return mse / (norm + self.EPS)
+
+    def psnr(self, *, target_image: torch.Tensor, output_image: torch.Tensor) -> float:
+
+        self._check_inputs(target_image=target_image, output_image=output_image)
+
+        mse = torch.nn.functional.mse_loss(output_image, target_image) + self.EPS
+
+        psnr = 10 * torch.log10(self.EXPECTED_MAX_PIXEL_VALUE ** 2 / mse).item()
+
+        return psnr
