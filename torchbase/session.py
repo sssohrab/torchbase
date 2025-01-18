@@ -1,4 +1,5 @@
-from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
+from torchbase.utils.session import TrainingConfigSessionDict
+from torchbase.utils.session import generate_log_dir_tag, is_custom_scalar_logging_layout_valid
 from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.metrics import BaseMetricsClass
 from torchbase.utils.networks import load_network_from_state_dict_to_device
@@ -151,6 +152,14 @@ class TrainingBaseSession(ABC):
         if not os.path.exists(os.path.join(source_states_dir, SAVED_OPTIMIZER_NAME)):
             raise FileNotFoundError("The optimizer `states_dict` file does not exist in the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
+
+    def add_writer_custom_scalar_logging_layout(self, layout_dict: Dict):
+        if is_custom_scalar_logging_layout_valid(layout_dict,
+                                                 self.datasets_valid_dict.names,
+                                                 tuple(self.metrics_functionals_dict.keys())):
+            self.writer.add_custom_scalars(layout_dict)
+        else:
+            raise TypeError("The provided `layout_dict` is not valid. Debug to see where exactly it fails.")
 
     def init_or_load_best_validation_loss_dict(self, create_run_dir_afresh: bool) -> Dict[str, Tuple[float, int]]:
         if create_run_dir_afresh:

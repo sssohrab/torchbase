@@ -440,6 +440,22 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
             metric_value = metric_functional(**outs_for_metric)
             self.assertIsInstance(metric_value, float)
 
+    def test_custom_scalar_logging_layout_valid(self):
+        layout = {
+            'Loss': {
+                'Loss (train vs val)': ['Multiline', ['training/loss/epochs',
+                                                      'validation-valid-with-aug/loss/epochs']],
+                'Loss valid (with and without aug)': ['Line', ['validation-valid-with-aug/loss/epochs',
+                                                               'validation-valid-no-aug/loss/epochs']],
+
+                'PSNR valid (with and without aug)': ['Line', ['validation-valid-with-aug/psnr/epochs',
+                                                               'validation-valid-no-aug/psnr/epochs']],
+
+            }
+        }
+
+        self.session.add_writer_custom_scalar_logging_layout(layout)
+
     def test_do_one_training_iteration(self):
         self.assertEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
         self.assertEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
