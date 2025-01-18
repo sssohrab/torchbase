@@ -429,6 +429,17 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
             inferred_mini_batch_size = self.session.infer_mini_batch_size(mini_batch)
             self.assertLessEqual(inferred_mini_batch_size, self.session.config_session.mini_batch_size)
 
+    def test_metrics_functionals(self):
+        metrics_functionals_dict = self.session.metrics_functionals_dict
+        mini_batch = next(iter(self.session.dataloader_train))
+        outs = self.session.forward_pass(mini_batch)
+
+        for metric_name, metric_functional in metrics_functionals_dict.items():
+            sig = inspect.signature(metric_functional)
+            outs_for_metric = {k: v for k, v in outs.items() if k in sig.parameters}
+            metric_value = metric_functional(**outs_for_metric)
+            self.assertIsInstance(metric_value, float)
+
     def test_do_one_training_iteration(self):
         self.assertEqual(self.session.value_logger_train.average_of_epoch["loss"], 0.0)
         self.assertEqual(self.session.value_logger_train.average_overall["loss"], 0.0)
