@@ -11,6 +11,9 @@ class CustomScalarLoggingLayoutValidityUnitTest(unittest.TestCase):
                 'Loss (train vs val)': ['Multiline', ['training/loss/epochs', 'validation-valid/loss/epochs']],
                 'Loss valid (with and without aug)': ['Line', ['validation-valid/loss/epochs',
                                                                'validation-valid_with_augmentation/loss/epochs']],
+                'Recall valid (with and without aug)': ['Line', ['validation-valid/recall/epochs',
+                                                                 'validation-valid_with_augmentation/recall/epochs'
+                                                                 ]]
             }
         }
 
@@ -19,12 +22,30 @@ class CustomScalarLoggingLayoutValidityUnitTest(unittest.TestCase):
                                                                                         "valid_with_augmentation"),
                                                               metric_names=("precision", "recall")))
 
-    def test_custom_scalar_logging_layout_invalid(self):
+    def test_custom_scalar_logging_layout_invalid_wrong_set_name(self):
         layout = {
             'Loss': {
                 'Loss (train vs val)': ['Multiline', ['train/loss/epochs', 'validation-valid/loss/epochs']],
                 'Loss valid (with and without aug)': ['Line', ['validation-valid/loss/epochs',
                                                                'validation-valid_with_augmentation/loss/epochs']],
+
+            }
+        }
+
+        self.assertFalse(is_custom_scalar_logging_layout_valid(layout,
+                                                               validation_dataset_names=("valid",
+                                                                                         "valid_with_augmentation"),
+                                                               metric_names=("precision", "recall")))
+
+    def test_custom_scalar_logging_layout_invalid_non_existing_metric(self):
+        layout = {
+            'Loss': {
+                'Loss (train vs val)': ['Multiline', ['training/loss/epochs', 'validation-valid/loss/epochs']],
+                'Loss valid (with and without aug)': ['Line', ['validation-valid/loss/epochs',
+                                                               'validation-valid_with_augmentation/loss/epochs']],
+                'AUC valid (with and without aug)': ['Line', ['validation-valid/AUC/epochs',
+                                                              'validation-valid_with_augmentation/AUC/epochs'
+                                                              ]]
             }
         }
 
