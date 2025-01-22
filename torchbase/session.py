@@ -1,5 +1,7 @@
-from torchbase.utils.session import generate_log_dir_tag, TrainingConfigSessionDict
+from torchbase.utils.session import TrainingConfigSessionDict
+from torchbase.utils.session import generate_log_dir_tag, is_custom_scalar_logging_layout_valid
 from torchbase.utils.data import ValidationDatasetsDict
+from torchbase.utils.metrics import BaseMetricsClass
 from torchbase.utils.networks import load_network_from_state_dict_to_device
 from torchbase.utils.logger import ProgressManager, ValuesLogger, LoggableParams
 
@@ -23,6 +25,7 @@ SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
 SAVED_RNG_NAME = "rng_states.pth"
 ITERATION_STEPS_TO_SAVE_STATES = 10
+DO_LOG_HPARAMS = True
 
 
 class TrainingBaseSession(ABC):
@@ -54,14 +57,18 @@ class TrainingBaseSession(ABC):
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
 
+        self.config_metrics = config["metrics"]
+        metrics_classes = self.init_metrics()
+        self.metrics_functionals_dict = self.get_metrics_functionals_dict_from_metrics_classes(metrics_classes)
+
         self.progress_train = ProgressManager()
-        self.loggable_train = LoggableParams({"loss": self.get_loss_value})
+        self.loggable_train = LoggableParams({**{"loss": self.get_loss_value}, **self.metrics_functionals_dict})
         self.value_logger_train = ValuesLogger(self.loggable_train.get_names(), progress_manager=self.progress_train)
 
         self.progress_valid_dict = {valid_dataset_name: ProgressManager() for valid_dataset_name in
                                     self.datasets_valid_dict.names}
         self.loggable_valid_dict = {
-            valid_dataset_name: LoggableParams({"loss": self.get_loss_value})
+            valid_dataset_name: LoggableParams({**{"loss": self.get_loss_value}, **self.metrics_functionals_dict})
             for valid_dataset_name in self.datasets_valid_dict.names}
         self.value_logger_valid_dict = {
             valid_dataset_name: ValuesLogger(self.loggable_train.get_names(),
@@ -69,6 +76,8 @@ class TrainingBaseSession(ABC):
             valid_dataset_name in self.datasets_valid_dict.names}
 
         self.best_validation_loss_dict = self.init_or_load_best_validation_loss_dict(create_run_dir_afresh)
+
+        self.hparams_dict = self.init_hparams_dict()
 
     @staticmethod
     def print(report: str, end: str | None = None) -> None:
@@ -146,6 +155,14 @@ class TrainingBaseSession(ABC):
         if not os.path.exists(os.path.join(source_states_dir, SAVED_OPTIMIZER_NAME)):
             raise FileNotFoundError("The optimizer `states_dict` file does not exist in the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
+
+    def add_writer_custom_scalar_logging_layout(self, layout_dict: Dict):
+        if is_custom_scalar_logging_layout_valid(layout_dict,
+                                                 self.datasets_valid_dict.names,
+                                                 tuple(self.metrics_functionals_dict.keys())):
+            self.writer.add_custom_scalars(layout_dict)
+        else:
+            raise TypeError("The provided `layout_dict` is not valid. Debug to see where exactly it fails.")
 
     def init_or_load_best_validation_loss_dict(self, create_run_dir_afresh: bool) -> Dict[str, Tuple[float, int]]:
         if create_run_dir_afresh:
@@ -288,6 +305,66 @@ class TrainingBaseSession(ABC):
         # Optimizer states loaded only for fresh run, but network states loaded anyway (if source run is specified).
         self.optimizer.load_state_dict(
             torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME), weights_only=True))
+
+    @abstractmethod
+    def init_metrics(self) -> List[BaseMetricsClass] | None:
+        pass
+
+    def get_metrics_functionals_dict_from_metrics_classes(self,
+                                                          metrics_classes:
+                                                          List[BaseMetricsClass] | None) -> (
+            Dict[str, Callable[..., Any]] | Dict[None, None]):
+        if metrics_classes is None:
+            return {}
+
+        if not isinstance(metrics_classes, list) or not all(
+                [isinstance(metrics_class, BaseMetricsClass) for metrics_class in metrics_classes]):
+            raise TypeError(
+                "The abstract `init_metrics_module` should implement a list of valid `BaseMetricsClass` instances.")
+
+        if set(self.config_metrics.keys()) != set([_class.__class__.__name__ for _class in metrics_classes]):
+            raise ValueError("The requested set of metrics classes from the metrics config does not match the "
+                             "implemented metrics classes within the abstract `init_metrics_module` method.")
+
+        metrics_functionals_dict: Dict[str, Callable[..., Any]] = {}
+        for metrics_class in metrics_classes:
+            requested_metrics_list = self.config_metrics[metrics_class.__class__.__name__]
+            implemented_metrics = metrics_class.get_all_metric_functionals_dict()
+            for metric in requested_metrics_list:
+                if metric not in implemented_metrics:
+                    raise ValueError("The metrics config requested to use `{}`, which is not available in the"
+                                     "set of metrics implemented at `{}`".format(metric, metrics_class.__name__))
+
+            if len(requested_metrics_list) > 0:
+                _metrics_functionals_dict = metrics_class.get_metrics(requested_metrics_list)
+                if set(metrics_functionals_dict.keys()) & set(_metrics_functionals_dict):
+                    raise ValueError(
+                        "Duplicate keys found across the metrics from different `BaseMetricsClass` instances.")
+                metrics_functionals_dict = {**metrics_functionals_dict, **_metrics_functionals_dict}
+
+        return metrics_functionals_dict
+
+    def init_hparams_dict(self) -> Dict[str, float | int]:
+        hparams_dict = {
+            "learning_rate": self.config_session.learning_rate,
+            "mini_batch_size": self.config_session.mini_batch_size,
+            "num_epochs": self.config_session.num_epochs,
+            "weight_decay": self.config_session.weight_decay,
+            "num_network_params": sum(p.numel() for p in self.network.parameters() if p.requires_grad)
+        }
+
+        return hparams_dict
+
+    def append_hparams_dict(self, optional_hparams_dict: Dict) -> None:
+        if not isinstance(optional_hparams_dict, dict) or not all(
+                [isinstance(key, str) for key in optional_hparams_dict.keys()]):
+            raise TypeError("Invalid `optional_hparams_dict` to be appended to the default one.")
+        self.hparams_dict = {**self.hparams_dict, **optional_hparams_dict}
+
+    def cleanup_previous_hparam_events_if_any(self):
+        hparams_event_dir = os.path.join(self.run_dir, "hparams")
+        if os.path.exists(hparams_event_dir):
+            shutil.rmtree(hparams_event_dir)
 
     def save_training_states(self) -> None:
         states_dir_path = os.path.join(self.run_dir, "states")
@@ -479,6 +556,13 @@ class TrainingBaseSession(ABC):
                 torch.save(self.network.state_dict(), os.path.join(self.writer.log_dir, SAVED_NETWORK_NAME))
 
                 model_saved_at_iteration = i_epoch
+
+                if DO_LOG_HPARAMS:
+                    self.cleanup_previous_hparam_events_if_any()
+                    self.writer.add_hparams(hparam_dict=self.hparams_dict,
+                                            metric_dict={"best_loss_{}".format(_k): _v for _k, (_v, _i) in
+                                                         self.best_validation_loss_dict.items()}, run_name="hparams")
+
                 self.print("SAVED the model at the epoch {}/{} ..".format(
                     i_epoch + 1, self.config_session.num_epochs))
             self.print("\n")

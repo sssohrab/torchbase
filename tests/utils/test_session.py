@@ -1,6 +1,58 @@
 from torchbase.utils.session import TrainingConfigSessionDict
+from torchbase.utils.session import is_custom_scalar_logging_layout_valid
 
 import unittest
+
+
+class CustomScalarLoggingLayoutValidityUnitTest(unittest.TestCase):
+    def test_custom_scalar_logging_layout_valid(self):
+        layout = {
+            'Loss': {
+                'Loss (train vs val)': ['Multiline', ['training/loss/epochs', 'validation-valid/loss/epochs']],
+                'Loss valid (with and without aug)': ['Line', ['validation-valid/loss/epochs',
+                                                               'validation-valid_with_augmentation/loss/epochs']],
+                'Recall valid (with and without aug)': ['Line', ['validation-valid/recall/epochs',
+                                                                 'validation-valid_with_augmentation/recall/epochs'
+                                                                 ]]
+            }
+        }
+
+        self.assertTrue(is_custom_scalar_logging_layout_valid(layout,
+                                                              validation_dataset_names=("valid",
+                                                                                        "valid_with_augmentation"),
+                                                              metric_names=("precision", "recall")))
+
+    def test_custom_scalar_logging_layout_invalid_wrong_set_name(self):
+        layout = {
+            'Loss': {
+                'Loss (train vs val)': ['Multiline', ['train/loss/epochs', 'validation-valid/loss/epochs']],
+                'Loss valid (with and without aug)': ['Line', ['validation-valid/loss/epochs',
+                                                               'validation-valid_with_augmentation/loss/epochs']],
+
+            }
+        }
+
+        self.assertFalse(is_custom_scalar_logging_layout_valid(layout,
+                                                               validation_dataset_names=("valid",
+                                                                                         "valid_with_augmentation"),
+                                                               metric_names=("precision", "recall")))
+
+    def test_custom_scalar_logging_layout_invalid_non_existing_metric(self):
+        layout = {
+            'Loss': {
+                'Loss (train vs val)': ['Multiline', ['training/loss/epochs', 'validation-valid/loss/epochs']],
+                'Loss valid (with and without aug)': ['Line', ['validation-valid/loss/epochs',
+                                                               'validation-valid_with_augmentation/loss/epochs']],
+                'AUC valid (with and without aug)': ['Line', ['validation-valid/AUC/epochs',
+                                                              'validation-valid_with_augmentation/AUC/epochs'
+                                                              ]]
+            }
+        }
+
+        self.assertFalse(is_custom_scalar_logging_layout_valid(layout,
+                                                               validation_dataset_names=("valid",
+                                                                                         "valid_with_augmentation"),
+                                                               metric_names=("precision", "recall")))
 
 
 class TrainingConfigSessionDictUnitTest(unittest.TestCase):
@@ -27,8 +79,8 @@ class TrainingConfigSessionDictUnitTest(unittest.TestCase):
             "dataloader_num_workers": 0,
             "loss_function_params": None,
         }
-        config_session = TrainingConfigSessionDict(config_session)
-        self.assertFalse(config_session.is_valid())
+        with self.assertRaises(ValueError):
+            TrainingConfigSessionDict(config_session)
 
 
 if __name__ == "__main__":
