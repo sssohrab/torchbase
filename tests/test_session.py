@@ -508,6 +508,10 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
 
             self.session.value_logger_valid_dict[valid_dataset_name].reset()
 
+    def test_append_optional_hparams(self):
+        optional_hparams_dict = {"num_ch": self.session.config_network["num_ch"]}
+        self.session.append_hparams_dict(optional_hparams_dict)
+
     def test_do_training(self):
         self.session.train()
 

@@ -25,6 +25,7 @@ SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
 SAVED_RNG_NAME = "rng_states.pth"
 ITERATION_STEPS_TO_SAVE_STATES = 10
+DO_LOG_HPARAMS = True
 
 
 class TrainingBaseSession(ABC):
@@ -75,6 +76,8 @@ class TrainingBaseSession(ABC):
             valid_dataset_name in self.datasets_valid_dict.names}
 
         self.best_validation_loss_dict = self.init_or_load_best_validation_loss_dict(create_run_dir_afresh)
+
+        self.hparams_dict = self.init_hparams_dict()
 
     @staticmethod
     def print(report: str, end: str | None = None) -> None:
@@ -341,6 +344,28 @@ class TrainingBaseSession(ABC):
 
         return metrics_functionals_dict
 
+    def init_hparams_dict(self) -> Dict[str, float | int]:
+        hparams_dict = {
+            "learning_rate": self.config_session.learning_rate,
+            "mini_batch_size": self.config_session.mini_batch_size,
+            "num_epochs": self.config_session.num_epochs,
+            "weight_decay": self.config_session.weight_decay,
+            "num_network_params": sum(p.numel() for p in self.network.parameters() if p.requires_grad)
+        }
+
+        return hparams_dict
+
+    def append_hparams_dict(self, optional_hparams_dict: Dict) -> None:
+        if not isinstance(optional_hparams_dict, dict) or not all(
+                [isinstance(key, str) for key in optional_hparams_dict.keys()]):
+            raise TypeError("Invalid `optional_hparams_dict` to be appended to the default one.")
+        self.hparams_dict = {**self.hparams_dict, **optional_hparams_dict}
+
+    def cleanup_previous_hparam_events_if_any(self):
+        hparams_event_dir = os.path.join(self.run_dir, "hparams")
+        if os.path.exists(hparams_event_dir):
+            shutil.rmtree(hparams_event_dir)
+
     def save_training_states(self) -> None:
         states_dir_path = os.path.join(self.run_dir, "states")
         torch.save(self.network.state_dict(), os.path.join(states_dir_path, SAVED_NETWORK_NAME))
@@ -531,6 +556,13 @@ class TrainingBaseSession(ABC):
                 torch.save(self.network.state_dict(), os.path.join(self.writer.log_dir, SAVED_NETWORK_NAME))
 
                 model_saved_at_iteration = i_epoch
+
+                if DO_LOG_HPARAMS:
+                    self.cleanup_previous_hparam_events_if_any()
+                    self.writer.add_hparams(hparam_dict=self.hparams_dict,
+                                            metric_dict={"best_loss_{}".format(_k): _v for _k, (_v, _i) in
+                                                         self.best_validation_loss_dict.items()}, run_name="hparams")
+
                 self.print("SAVED the model at the epoch {}/{} ..".format(
                     i_epoch + 1, self.config_session.num_epochs))
             self.print("\n")
