@@ -79,8 +79,8 @@ class TrainingConfigSessionDictUnitTest(unittest.TestCase):
             "dataloader_num_workers": 0,
             "loss_function_params": None,
         }
-        config_session = TrainingConfigSessionDict(config_session)
-        self.assertFalse(config_session.is_valid())
+        with self.assertRaises(ValueError):
+            TrainingConfigSessionDict(config_session)
 
 
 if __name__ == "__main__":
