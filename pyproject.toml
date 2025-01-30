@@ -3,12 +3,14 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
+
 name = "torchbase"
 version = "0.1.0"
 authors = [
     { name = "Sohrab Ferdowsi", email = "sohrab.ferdowsi@gmail.com" },
 ]
 description = "A minimalist base for ML projects in PyTorch"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 
 dependencies = [
@@ -19,6 +21,7 @@ dependencies = [
     "scikit-learn",
     "torchinfo"
 ]
+
 
 
 [tool.setuptools.packages.find]
