@@ -8,25 +8,18 @@ version = "0.0.0"
 authors = [
     { name = "Sohrab Ferdowsi", email = "sohrab.ferdowsi@gmail.com" },
 ]
-description = "To base your pytorch-based projects on."
+description = "A minimalist base for ML projects in PyTorch"
 requires-python = ">=3.10"
 
 dependencies = [
     "torch",
-    "numpy",
-    "python_dateutil",
-    "scikit-learn",
+    "datasets",
     "tensorboard",
+    "numpy",
+    "scikit-learn",
     "torchinfo"
 ]
 
-[project.optional-dependencies]
-interactive = [
-    "jupyter",
-    "jupyterlab",
-    "ipykernel",
-    "matplotlib"
-]
 
 [tool.setuptools.packages.find]
 include = ["torchbase*"]
