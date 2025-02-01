@@ -1,28 +1,24 @@
-[build-system]
-requires = ["setuptools>=64", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
-
+[tool.poetry]
 name = "torchbase"
 version = "0.1.0"
-authors = [
-    { name = "Sohrab Ferdowsi", email = "sohrab.ferdowsi@gmail.com" },
-]
 description = "A minimalist base for ML projects in PyTorch"
-license = { file = "LICENSE" }
-requires-python = ">=3.10"
+authors = ["Sohrab Ferdowsi <sohrab.ferdowsi@gmail.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+packages = [{ include = "torchbase" }]
 
-dependencies = [
-    "torch",
-    "datasets",
-    "tensorboard",
-    "numpy",
-    "scikit-learn",
-    "torchinfo"
-]
+[tool.poetry.dependencies]
+python = ">=3.10"
+torch = "*"
+datasets = "*"
+tensorboard = "*"
+numpy = "*"
+scikit-learn = "*"
 
 
+[tool.poetry.group.dev.dependencies]
+torchvision = "*"
 
-[tool.setuptools.packages.find]
-include = ["torchbase*"]
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
