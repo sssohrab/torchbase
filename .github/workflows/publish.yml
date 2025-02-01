@@ -1,0 +1,78 @@
+name: test and publish to PyPI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  push:
+    tags:
+      - "v*"
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Run unittests
+        run: poetry run python -m unittest discover tests
+
+  publish:
+    name: Publish to PyPI / TestPyPI
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-dev
+
+      - name: Determine repository (PyPI or TestPyPI)
+        id: pypi_repo
+        run: |
+          if [[ "${{ github.ref }}" == *"-final" ]]; then
+            echo "repo=pypi" >> $GITHUB_ENV
+          else
+            echo "repo=testpypi" >> $GITHUB_ENV
+          fi
+
+      - name: Publish to PyPI/TestPyPI
+        env:
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
+          POETRY_PYPI_TOKEN_TESTPYPI: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          if [[ "$repo" == "testpypi" ]]; then
+            poetry publish --repository testpypi
+          else
+            poetry publish
+          fi
+
