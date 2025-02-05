@@ -18,6 +18,7 @@ scikit-learn = "*"
 
 [tool.poetry.group.dev.dependencies]
 torchvision = "*"
+coverage = "^7.6.10"
 
 [build-system]
 requires = ["poetry-core"]
