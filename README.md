@@ -2,6 +2,9 @@
 
 A minimalist base for ML projects in PyTorch
 
+
+![Coverage](https://codecov.io/gh/sssohrab/torchbase/branch/main/graph/badge.svg)
+
 ## Installation
 
 Simply pip-install in the environment where your ML projects lies, paying attention to the requirements:
