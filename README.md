@@ -4,6 +4,7 @@ A minimalist base for ML projects in PyTorch
 
 
 ![Coverage](https://codecov.io/gh/sssohrab/torchbase/branch/main/graph/badge.svg)
+![PyPI](https://img.shields.io/pypi/v/torchbase.svg)
 
 ## Installation
 
