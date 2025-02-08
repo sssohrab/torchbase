@@ -170,9 +170,9 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
         self.assertIsInstance(self.session_fresh_run_pretrained_network, TrainingBaseSession)
 
     def test_datasets_random_access_as_torch_tensor(self):
-        datasets = ([self.session_fresh_run_fresh_network.dataset_train]
-                    + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
-        for dataset in datasets:
+        all_datasets = ([self.session_fresh_run_fresh_network.dataset_train]
+                        + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
+        for dataset in all_datasets:
             idx = random.randint(0, dataset.__len__() - 1)
             for expected_keys in ["inputs", "labels"]:
                 self.assertIn(expected_keys, dataset[idx])
