@@ -116,7 +116,8 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
             config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
-            source_run_dir_tag=None
+            source_run_dir_tag=None,
+            tag_postfix="fresh-run-fresh-net"
         )
 
         cls.mock_train_steps_and_save_network_and_optimizer()
@@ -134,7 +135,8 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
             config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
-            source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1]
+            source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1],
+            tag_postfix="fresh-run-existing-net"
         )
 
     @classmethod
