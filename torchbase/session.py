@@ -127,6 +127,11 @@ class TrainingBaseSession(ABC):
             return os.path.join(runs_parent_dir, run_dir_tag)
 
         else:
+            if tag_postfix is not None:
+                raise ValueError(
+                    "It is asked to recover an existing run (rather than creating a new one), yet a tag to post-fix a"
+                    " (presumably new) run name is assigned.")
+
             if not isinstance(source_run_dir_tag, str):
                 raise TypeError("By choosing `create_run_dir_afresh = False`, you requested to take over from an "
                                 "existing `run_dir`. However, the passed `source_run_dir_tag` is not a string.")
