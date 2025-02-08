@@ -3,10 +3,10 @@ name: Run Tests & Coverage
 on:
   push:
     branches:
-      - main
+      - development
   pull_request:
     branches:
-      - main
+      - development
 
 env:
   PYTHON_VERSION: "3.10"
