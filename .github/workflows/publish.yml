@@ -27,6 +27,12 @@ jobs:
       - name: Install dependencies
         run: poetry install --without dev
 
+      - name: Build the package
+        run: poetry build
+
+      - name: Configure TestPyPI Repository
+        run: poetry config repositories.testpypi https://test.pypi.org/legacy/
+
       - name: Determine repository (PyPI or TestPyPI)
         id: pypi_repo
         run: |
@@ -35,10 +41,6 @@ jobs:
           else
             echo "repo=testpypi" >> $GITHUB_ENV
           fi
-
-
-      - name: Build the package
-        run: poetry build
 
       - name: Publish to PyPI/TestPyPI
         env:
@@ -49,4 +51,4 @@ jobs:
             poetry publish --repository testpypi
           else
             poetry publish
-          fi    
+          fi
