@@ -1,0 +1,35 @@
+name: Validate Tests Before Merging
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      - development
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  validate:
+    name: Run Tests for PR Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Run unittests
+        run: poetry run python -m unittest discover tests

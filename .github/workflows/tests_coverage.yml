@@ -3,10 +3,10 @@ name: Run Tests & Coverage
 on:
   push:
     branches:
-      - main
+      - development
   pull_request:
     branches:
-      - main
+      - development
 
 env:
   PYTHON_VERSION: "3.10"
@@ -31,12 +31,10 @@ jobs:
         run: poetry install --with dev
 
       - name: Run unittests with coverage
-        run: poetry run coverage run --source=torchbase -m unittest discover tests
-        continue-on-error: true
+        run: poetry run coverage run --source=torchbase -m unittest discover -s tests
 
       - name: Generate coverage report
         run: poetry run coverage xml
-
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
