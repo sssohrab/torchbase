@@ -25,7 +25,7 @@ jobs:
         run: pip install poetry
 
       - name: Install dependencies
-        run: poetry install --no-dev
+        run: poetry install --without dev
 
       - name: Determine repository (PyPI or TestPyPI)
         id: pypi_repo
