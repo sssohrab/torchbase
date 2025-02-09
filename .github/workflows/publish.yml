@@ -36,6 +36,10 @@ jobs:
             echo "repo=testpypi" >> $GITHUB_ENV
           fi
 
+
+      - name: Build the package
+        run: poetry build
+
       - name: Publish to PyPI/TestPyPI
         env:
           POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
@@ -45,4 +49,4 @@ jobs:
             poetry publish --repository testpypi
           else
             poetry publish
-          fi
+          fi    
