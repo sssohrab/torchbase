@@ -6,6 +6,7 @@ from torchbase.utils.metrics import BaseMetricsClass
 from torchbase.utils.metrics_instances import BinaryClassificationMetrics, ImageReconstructionMetrics
 
 import torch
+import numpy as np
 from torchvision import transforms
 from datasets import Dataset
 import datasets
@@ -116,12 +117,17 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
             config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
-            source_run_dir_tag=None
+            source_run_dir_tag=None,
+            tag_postfix="fresh-run-fresh-net"
         )
 
         cls.mock_train_steps_and_save_network_and_optimizer()
 
         time.sleep(1)  # To avoid creating the same tag again.
+        # Just consuming some randomness before creating the next one:
+        torch.rand(10)
+        np.random.rand(10)
+        random.random()
 
         cls.session_existing_run = ExampleTrainingSessionClassStatic(
             config=ExampleTrainingSessionClassStatic.get_config(),
@@ -130,11 +136,17 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
             source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1]
         )
 
+        # Just consuming some randomness before creating the next one:
+        torch.rand(10)
+        np.random.rand(10)
+        random.random()
+
         cls.session_fresh_run_pretrained_network = ExampleTrainingSessionClassStatic(
             config=ExampleTrainingSessionClassStatic.get_config(),
             runs_parent_dir=TEST_STORAGE_DIR,
             create_run_dir_afresh=True,
-            source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1]
+            source_run_dir_tag=os.path.split(cls.session_fresh_run_fresh_network.run_dir)[-1],
+            tag_postfix="fresh-run-existing-net"
         )
 
     @classmethod
@@ -170,9 +182,9 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
         self.assertIsInstance(self.session_fresh_run_pretrained_network, TrainingBaseSession)
 
     def test_datasets_random_access_as_torch_tensor(self):
-        datasets = ([self.session_fresh_run_fresh_network.dataset_train]
-                    + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
-        for dataset in datasets:
+        all_datasets = ([self.session_fresh_run_fresh_network.dataset_train]
+                        + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
+        for dataset in all_datasets:
             idx = random.randint(0, dataset.__len__() - 1)
             for expected_keys in ["inputs", "labels"]:
                 self.assertIn(expected_keys, dataset[idx])
@@ -207,7 +219,9 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
         wrong_config["network"]["architecture"] = "SomeMistakenlyHeldNetworkName"
         with self.assertRaises(TypeError):
             time.sleep(1)  # To avoid creating the same tag again.
-            ExampleTrainingSessionClassStatic(config=wrong_config, runs_parent_dir=TEST_STORAGE_DIR)
+            ExampleTrainingSessionClassStatic(config=wrong_config,
+                                              runs_parent_dir=TEST_STORAGE_DIR,
+                                              tag_postfix="wrong-net-name")
 
     def test_network_loading(self):
         network_saved = self.session_fresh_run_fresh_network.network

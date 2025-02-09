@@ -1,7 +1,11 @@
-from dataclasses import dataclass, fields, asdict
-
+from dataclasses import dataclass, fields, field, asdict
 from typing import Dict, Tuple
 
+import torch
+import numpy as np
+import random
+
+import json
 import datetime
 import socket
 
@@ -120,3 +124,67 @@ class TrainingConfigSessionDict:
                 return False
 
         return True
+
+
+@dataclass
+class RandomnessGeneratorStates:
+    torch_state: bytes = field(default_factory=lambda: torch.get_rng_state().numpy().tobytes())
+    cuda_state: bytes = field(
+        default_factory=lambda: torch.cuda.get_rng_state().numpy().tobytes() if torch.cuda.is_available() else b"")
+    numpy_state: tuple = field(default_factory=lambda: np.random.get_state())
+    random_state: tuple = field(default_factory=lambda: random.getstate())
+
+    def save(self, filename: str):
+        data = {
+            "torch_state": self.torch_state.hex(),
+            "cuda_state": self.cuda_state.hex() if self.cuda_state else "",
+            "numpy_state": (
+                self.numpy_state[0],
+                self.numpy_state[1].tolist(),
+                *self.numpy_state[2:]
+            ),
+            "random_state": (self.random_state[0], list(self.random_state[1]), self.random_state[2])
+        }
+        with open(filename, "w") as f:
+            json.dump(data, f, indent=2)
+
+    @classmethod
+    def load(cls, filename: str):
+        with open(filename, "r") as f:
+            data = json.load(f)
+
+        rng_state = cls()
+        rng_state.torch_state = bytes.fromhex(data["torch_state"])
+        if data["cuda_state"]:
+            rng_state.cuda_state = bytes.fromhex(data["cuda_state"])
+
+        numpy_state = (
+            data["numpy_state"][0],
+            np.array(data["numpy_state"][1], dtype=np.uint32),
+            *data["numpy_state"][2:]
+        )
+        rng_state.numpy_state = numpy_state
+
+        rng_state.random_state = (
+            data["random_state"][0],
+            tuple(data["random_state"][1]),
+            data["random_state"][2]
+        )
+
+        return rng_state
+
+    def apply(self):
+        torch.set_rng_state(torch.tensor(np.frombuffer(self.torch_state, dtype=np.uint8)))
+        if self.cuda_state and torch.cuda.is_available():
+            torch.cuda.set_rng_state(torch.tensor(np.frombuffer(self.cuda_state, dtype=np.uint8)))
+
+        numpy_state = (
+            str(self.numpy_state[0]),
+            np.array(self.numpy_state[1], dtype=np.uint32),
+            int(self.numpy_state[2]),
+            int(self.numpy_state[3]),
+            float(self.numpy_state[4])
+        )
+        np.random.set_state(numpy_state)
+
+        random.setstate(self.random_state)

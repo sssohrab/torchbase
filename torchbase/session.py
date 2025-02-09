@@ -1,5 +1,6 @@
 from torchbase.utils.session import TrainingConfigSessionDict
 from torchbase.utils.session import generate_log_dir_tag, is_custom_scalar_logging_layout_valid
+from torchbase.utils.session import RandomnessGeneratorStates
 from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.metrics import BaseMetricsClass
 from torchbase.utils.networks import load_network_from_state_dict_to_device
@@ -23,7 +24,7 @@ import shutil
 
 SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
-SAVED_RNG_NAME = "rng_states.pth"
+SAVED_RNG_NAME = "rng_states.json"
 ITERATION_STEPS_TO_SAVE_STATES = 10
 DO_LOG_HPARAMS = True
 
@@ -126,6 +127,11 @@ class TrainingBaseSession(ABC):
             return os.path.join(runs_parent_dir, run_dir_tag)
 
         else:
+            if tag_postfix is not None:
+                raise ValueError(
+                    "It is asked to recover an existing run (rather than creating a new one), yet a tag to post-fix a"
+                    " (presumably new) run name is assigned.")
+
             if not isinstance(source_run_dir_tag, str):
                 raise TypeError("By choosing `create_run_dir_afresh = False`, you requested to take over from an "
                                 "existing `run_dir`. However, the passed `source_run_dir_tag` is not a string.")
@@ -183,21 +189,14 @@ class TrainingBaseSession(ABC):
         states_dir = os.path.join(run_dir, "states")
 
         if create_run_dir_afresh:
+            rng = RandomnessGeneratorStates()
             os.makedirs(states_dir, exist_ok=False)
-            torch.save({"torch_rng_state": torch.get_rng_state(),
-                        "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
-                        "numpy_rng_state": np.random.get_state(),
-                        "random_rng_state": random.getstate()}, os.path.join(states_dir, SAVED_RNG_NAME))
+            rng.save(os.path.join(states_dir, SAVED_RNG_NAME))
 
         else:
             TrainingBaseSession.check_source_states_dir_is_valid(states_dir)
-            # TODO (#9): The warning regarding weight_only option. Instead of pickling, just serialize them with json.
-            rng_states = torch.load(os.path.join(states_dir, SAVED_RNG_NAME))
-            torch.set_rng_state(rng_states["torch_rng_state"])
-            if rng_states["cuda_rng_state"] is not None:
-                torch.cuda.set_rng_state(rng_states["cuda_rng_state"])
-            np.random.set_state(rng_states["numpy_rng_state"])
-            random.setstate(rng_states["random_rng_state"])
+            rng = RandomnessGeneratorStates.load(os.path.join(states_dir, SAVED_RNG_NAME))
+            rng.apply()
 
     def save_config_to_run_dir(self, create_run_dir_afresh: bool) -> None:
         config = {
