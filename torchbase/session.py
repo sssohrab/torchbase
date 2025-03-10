@@ -228,10 +228,6 @@ class TrainingBaseSession(ABC):
         if not datasets_valid_dict.is_valid():
             raise ValueError("Failed to create a valid `datasets_valid_dict`, an instance of `ValidationDatasetsDict`.")
 
-        dataset_train.set_format("torch")
-        for dataset in datasets_valid_dict.datasets:
-            dataset.set_format("torch")
-
         return dataset_train, datasets_valid_dict
 
     def init_dataloaders(self) -> Tuple[DataLoader, Dict[str, DataLoader]]:
