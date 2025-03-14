@@ -185,6 +185,7 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
         all_datasets = ([self.session_fresh_run_fresh_network.dataset_train]
                         + list(self.session_fresh_run_fresh_network.datasets_valid_dict.datasets))
         for dataset in all_datasets:
+            dataset.set_format("torch")
             idx = random.randint(0, dataset.__len__() - 1)
             for expected_keys in ["inputs", "labels"]:
                 self.assertIn(expected_keys, dataset[idx])
@@ -348,6 +349,11 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
         dataset_train_with_augmentation = Dataset.from_dict(data_train).map(lambda x: augment(x))
         dataset_valid_without_augmentation = Dataset.from_dict(data_valid)
         dataset_valid_with_augmentation = Dataset.from_dict(data_valid).map(augment)
+
+        dataset_train_without_augmentation.set_format("torch")
+        dataset_train_with_augmentation.set_format("torch")
+        dataset_valid_without_augmentation.set_format("torch")
+        dataset_valid_with_augmentation.set_format("torch")
 
         return (dataset_train_with_augmentation,
                 ValidationDatasetsDict(
