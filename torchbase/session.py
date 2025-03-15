@@ -258,6 +258,8 @@ class TrainingBaseSession(ABC):
     def _init_network(self) -> torch.nn.Module:
 
         network = self.init_network()
+        network = network.to(self.device)
+
         if not isinstance(network, torch.nn.Module):
             raise TypeError("Failed to instantiate a valid `network`, an instance of `torch.nn.Module`.")
 

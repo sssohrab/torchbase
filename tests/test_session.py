@@ -24,13 +24,20 @@ import inspect
 TEST_STORAGE_DIR = os.path.join(os.path.split(os.path.abspath(__file__))[0], "storage")
 os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
 
+DEVICE_NAME = "cpu"
+if torch.cuda.is_available():
+    DEVICE_NAME = "cuda:0"
+
+if torch.mps.is_available():
+    DEVICE_NAME = "mps"
+
 
 class ExampleTrainingSessionClassStatic(TrainingBaseSession):
     @staticmethod
     def get_config() -> Dict:
         config = {
             "session": {
-                "device_name": "cpu",
+                "device_name": DEVICE_NAME,
                 "num_epochs": 1,
                 "mini_batch_size": 4,
                 "learning_rate": 0.01,
@@ -233,6 +240,16 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
         self.assertTrue(torch.allclose(network_pretrained.conv1.weight, network_saved.conv1.weight))
         self.assertTrue(torch.allclose(network_pretrained.conv2.weight, network_saved.conv2.weight))
 
+    def test_network_to_device(self):
+        for parameter in self.session_fresh_run_fresh_network.network.parameters():
+            self.assertEqual(parameter.device.type, DEVICE_NAME)
+
+        for parameter in self.session_fresh_run_pretrained_network.network.parameters():
+            self.assertEqual(parameter.device.type, DEVICE_NAME)
+
+        for parameter in self.session_existing_run.network.parameters():
+            self.assertEqual(parameter.device.type, DEVICE_NAME)
+
     def test_optimizer_loading(self):
         optimizer_saved = self.session_fresh_run_fresh_network.optimizer
         optimizer_recovered = self.session_existing_run.optimizer
@@ -279,7 +296,7 @@ class ExampleTrainingSessionClassDynamic(TrainingBaseSession):
     def get_config() -> Dict:
         config = {
             "session": {
-                "device_name": "cpu",
+                "device_name": DEVICE_NAME,
                 "num_epochs": 10,
                 "mini_batch_size": 6,
                 "learning_rate": 0.01,
