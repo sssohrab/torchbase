@@ -1,25 +1,55 @@
-[tool.poetry]
+[project]
 name = "torchbase"
 version = "0.1.3"
 description = "A minimalist base for ML projects in PyTorch"
-authors = ["Sohrab Ferdowsi <sohrab.ferdowsi@gmail.com>"]
+authors = [{ name = "Sohrab Ferdowsi", email = "sohrab.ferdowsi@gmail.com" }]
 license = "Apache-2.0"
 readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["torch", "datasets", "tensorboard", "numpy", "scikit-learn"]
+
+[project.urls]
+Repository = "https://github.com/sssohrab/torchbase"
+Issues = "https://github.com/sssohrab/torchbase/issues"
+
+[dependency-groups]
+dev = ["torchvision", "coverage[toml]>=7.6.10,<8"]
+tooling = ["ruff>=0.11,<1", "twine>=6,<7"]
+
+# Keep the existing package layout and backend during the tooling migration.
+[tool.poetry]
 packages = [{ include = "torchbase" }]
 
-[tool.poetry.dependencies]
-python = ">=3.10"
-torch = "*"
-datasets = "*"
-tensorboard = "*"
-numpy = "*"
-scikit-learn = "*"
-
-
-[tool.poetry.group.dev.dependencies]
-torchvision = "*"
-coverage = "^7.6.10"
-
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=2.2,<3"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.uv]
+required-version = ">=0.11.7"
+
+# Contributor/CI environments use CPU wheels on Linux. This does not change
+# published requirements or the PyTorch installation chosen by pip users.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Catch syntax/undefined-name errors without imposing a formatting rewrite.
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.coverage.run]
+source = ["torchbase"]
+
+[tool.coverage.report]
+fail_under = 70
+
+[tool.coverage.paths]
+source = ["torchbase", "*/site-packages/torchbase"]
