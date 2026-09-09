@@ -60,7 +60,7 @@ class BinaryClassificationMetricsUnitTest(unittest.TestCase):
 
     def test_invalid_non_probability_predictions(self):
         ground_truth = torch.tensor([1, 1, 0, 0, 0])
-        predictions = torch.normal(mean=0.0, std=1.0, size=ground_truth.shape)
+        predictions = torch.tensor([-0.1, 0.2, 0.5, 0.8, 1.1])
 
         with self.assertRaises(AssertionError):
             self.metric_calculator.pr_auc(binary_ground_truth=ground_truth, prediction_probabilities=predictions)

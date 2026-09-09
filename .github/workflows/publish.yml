@@ -1,54 +1,53 @@
-name: Publish to PyPI
+name: Publish
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
-env:
-  PYTHON_VERSION: "3.10"
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish to PyPI / TestPyPI
+  checks:
+    name: Checks
+    uses: ./.github/workflows/ci.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  testpypi:
+    name: Publish to TestPyPI
+    needs: checks
     runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/torchbase
+    permissions:
+      id-token: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v4
+      - uses: actions/download-artifact@v8
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
 
-      - name: Install Poetry
-        run: pip install poetry
-
-      - name: Install dependencies
-        run: poetry install --without dev
-
-      - name: Build the package
-        run: poetry build
-
-      - name: Configure TestPyPI Repository
-        run: poetry config repositories.testpypi https://test.pypi.org/legacy/
-
-      - name: Determine repository (PyPI or TestPyPI)
-        id: pypi_repo
-        run: |
-          if [[ "${{ github.ref }}" == *"-final" ]]; then
-            echo "repo=pypi" >> $GITHUB_ENV
-          else
-            echo "repo=testpypi" >> $GITHUB_ENV
-          fi
-
-      - name: Publish to PyPI/TestPyPI
-        env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
-          POETRY_PYPI_TOKEN_TESTPYPI: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          if [[ "$repo" == "testpypi" ]]; then
-            poetry publish --repository testpypi
-          else
-            poetry publish
-          fi
+  pypi:
+    name: Publish to PyPI
+    needs: testpypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/torchbase
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

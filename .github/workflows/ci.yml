@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.11.7"
+
+jobs:
+  build:
+    name: Lint and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --locked --only-group tooling
+      - run: uv run --no-sync ruff check torchbase tests scripts
+      # By default uv builds the wheel from the sdist, checking both build paths.
+      - run: uv build --out-dir wheelhouse
+      - name: Check distributions and release tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            uv run --no-sync python scripts/check_distribution.py wheelhouse --tag "$GITHUB_REF_NAME"
+          else
+            uv run --no-sync python scripts/check_distribution.py wheelhouse
+          fi
+          uv run --no-sync twine check --strict wheelhouse/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: distributions
+          path: wheelhouse/
+          if-no-files-found: error
+
+  tests:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }}, ${{ matrix.dependencies }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        dependencies: [locked]
+        include:
+          - os: macos-latest
+            python: "3.13"
+            dependencies: locked
+          - os: ubuntu-latest
+            python: "3.13"
+            dependencies: latest
+    env:
+      COVERAGE_FILE: ${{ github.workspace }}/.coverage
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: wheelhouse/
+      - name: Install locked dependencies
+        if: matrix.dependencies == 'locked'
+        run: uv sync --locked --no-install-project
+      - name: Resolve current compatible dependencies
+        if: matrix.dependencies == 'latest'
+        run: uv sync --upgrade --no-install-project
+      - name: Install the built wheel
+        run: uv pip install --no-deps wheelhouse/*.whl
+      - name: Test the installed wheel outside the checkout
+        shell: bash
+        run: |
+          test_dir="$(mktemp -d)"
+          cp -R tests "$test_dir/tests"
+          cd "$test_dir"
+          "$GITHUB_WORKSPACE/.venv/bin/python" -m coverage run --parallel-mode \
+            --rcfile="$GITHUB_WORKSPACE/pyproject.toml" -m unittest discover -s tests -b
+      - name: Enforce coverage and generate report
+        run: |
+          uv run --no-sync coverage combine
+          uv run --no-sync coverage report
+          uv run --no-sync coverage xml
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13' && matrix.dependencies == 'locked'
+        continue-on-error: true
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  result:
+    name: CI
+    if: always()
+    needs: [build, tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every check to pass
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          TEST_RESULT: ${{ needs.tests.result }}
+        run: |
+          echo "build=$BUILD_RESULT, tests=$TEST_RESULT"
+          if [[ "$BUILD_RESULT" != "success" || "$TEST_RESULT" != "success" ]]; then
+            echo "::error::CI failed: build=$BUILD_RESULT, tests=$TEST_RESULT. Inspect the failed upstream job for the cause."
+            exit 1
+          fi
