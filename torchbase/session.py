@@ -21,10 +21,12 @@ import os
 import random
 import json
 import shutil
+import warnings
 
 SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
 SAVED_RNG_NAME = "rng_states.json"
+SAVED_CONTINUATION_RNG_NAME = "rng_states_continuation.json"
 ITERATION_STEPS_TO_SAVE_STATES = 10
 DO_LOG_HPARAMS = True
 
@@ -79,6 +81,15 @@ class TrainingBaseSession(ABC):
         self.best_validation_loss_dict = self.init_or_load_best_validation_loss_dict(create_run_dir_afresh)
 
         self.hparams_dict = self.init_hparams_dict()
+
+        if not create_run_dir_afresh:
+            try:
+                # Initialization consumes randomness while rebuilding data and
+                # the network. Restore continuation randomness only afterwards.
+                self._restore_training_state()
+            except Exception:
+                self.writer.close()
+                raise
 
     @staticmethod
     def print(report: str, end: str | None = None) -> None:
@@ -299,9 +310,39 @@ class TrainingBaseSession(ABC):
 
         if create_run_dir_afresh:
             return
-        # Optimizer states loaded only for fresh run, but network states loaded anyway (if source run is specified).
+        # A new run reuses weights only; an existing run also restores its optimizer.
         self.optimizer.load_state_dict(
-            torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME), weights_only=True))
+            torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME),
+                       map_location=self.device, weights_only=True))
+
+    def _restore_training_state(self) -> None:
+        """Restore completed-epoch progress, logs, and continuation RNG after initialization."""
+        states_dir = os.path.join(self.run_dir, "states")
+        self.progress_train.set_fields_from_disk(os.path.join(states_dir, "progress_manager_train.json"))
+        self.value_logger_train.set_state_values_from_disk(os.path.join(states_dir, "values_logger_train.json"))
+        for name in self.datasets_valid_dict.names:
+            self.progress_valid_dict[name].set_fields_from_disk(
+                os.path.join(states_dir, "progress_manager_valid_{}.json".format(name)))
+            self.value_logger_valid_dict[name].set_state_values_from_disk(
+                os.path.join(states_dir, "values_logger_valid_{}.json".format(name)))
+
+        # A shuffled dataloader cannot recover a partial epoch from counters alone.
+        progress_managers = [self.progress_train, *self.progress_valid_dict.values()]
+        if any(progress.iter_current_epoch != 0 or progress.samples_current_epoch != 0
+               or progress.epoch != self.progress_train.epoch for progress in progress_managers):
+            raise ValueError(
+                "Resume requires a completed training-and-validation epoch. This checkpoint is partial or "
+                "has inconsistent epoch counters; dataloader positions are not saved. Use an intact "
+                "completed-epoch checkpoint, or start a new run with these weights.")
+
+        continuation_rng_path = os.path.join(states_dir, SAVED_CONTINUATION_RNG_NAME)
+        if os.path.exists(continuation_rng_path):
+            RandomnessGeneratorStates.load(continuation_rng_path).apply()
+        else:
+            warnings.warn(
+                "Checkpoint has no continuation RNG state (as in torchbase <=0.1.4). "
+                "Saved training state was restored, but the original random sequence cannot be recovered.",
+                RuntimeWarning, stacklevel=2)
 
     @abstractmethod
     def init_metrics(self) -> List[BaseMetricsClass] | None:
@@ -373,6 +414,7 @@ class TrainingBaseSession(ABC):
 
         self.progress_train.serialize_to_disk(os.path.join(states_dir_path, "progress_manager_train.json"))
         self.value_logger_train.serialize_to_disk(os.path.join(states_dir_path, "values_logger_train.json"))
+        RandomnessGeneratorStates().save(os.path.join(states_dir_path, SAVED_CONTINUATION_RNG_NAME))
 
     def save_progress_and_log_states_for_valid_set(self, valid_dataset_name: str):
         states_dir_path = os.path.join(self.run_dir, "states")
@@ -563,6 +605,10 @@ class TrainingBaseSession(ABC):
                 self.print("SAVED the model at the epoch {}/{} ..".format(
                     i_epoch + 1, self.config_session.num_epochs))
             self.print("\n")
+
+            # Validation may consume randomness too. Keep the initialization RNG
+            # untouched and capture the state used to start the next epoch.
+            RandomnessGeneratorStates().save(os.path.join(self.run_dir, "states", SAVED_CONTINUATION_RNG_NAME))
 
         self.print("\nThis is the end of training and validation.")
         if model_saved_at_iteration is not None:
