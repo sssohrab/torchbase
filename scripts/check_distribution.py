@@ -1,4 +1,4 @@
-"""Check release metadata and package contents using Python 3.11+ stdlib only."""
+"""Check release metadata and package contents using Python 3.11+ and the tooling group."""
 
 import argparse
 from email.parser import BytesParser
@@ -7,6 +7,8 @@ import re
 import tarfile
 import tomllib
 import zipfile
+
+from packaging.requirements import Requirement
 
 
 def check_distribution(dist_dir: Path, tag: str | None = None) -> None:
@@ -58,7 +60,10 @@ def check_distribution(dist_dir: Path, tag: str | None = None) -> None:
         ):
             if artifact_metadata[field] != expected:
                 raise ValueError(f"Unexpected {field}: {artifact_metadata[field]!r}")
-        if set(artifact_metadata.get_all("Requires-Dist", [])) != set(project["dependencies"]):
+        # Build backends can add whitespace/parentheses or normalize package names
+        # without changing a requirement's meaning.
+        if ({Requirement(value) for value in artifact_metadata.get_all("Requires-Dist", [])}
+                != {Requirement(value) for value in project["dependencies"]}):
             raise ValueError("Published dependencies differ from [project].dependencies.")
         if artifact_metadata.get_payload().strip() != (root / "README.md").read_text().strip():
             raise ValueError("Package description differs from README.md.")

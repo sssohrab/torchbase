@@ -6,7 +6,7 @@ authors = [{ name = "Sohrab Ferdowsi", email = "sohrab.ferdowsi@gmail.com" }]
 license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["torch", "datasets", "tensorboard", "numpy", "scikit-learn"]
+dependencies = ["torch>=2.6", "torchdata>=0.11", "datasets", "tensorboard", "numpy", "scikit-learn"]
 
 [project.urls]
 Repository = "https://github.com/sssohrab/torchbase"
@@ -14,7 +14,7 @@ Issues = "https://github.com/sssohrab/torchbase/issues"
 
 [dependency-groups]
 dev = ["torchvision", "coverage[toml]>=7.6.10,<8"]
-tooling = ["ruff>=0.11,<1", "twine>=6,<7"]
+tooling = ["ruff>=0.11,<1", "twine>=6,<7", "packaging>=24"]
 
 # Keep the existing package layout and backend during the tooling migration.
 [tool.poetry]

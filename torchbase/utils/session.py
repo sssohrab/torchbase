@@ -79,6 +79,7 @@ class TrainingConfigSessionDict:
     learning_rate: float
     weight_decay: float = 0.0
     dataloader_num_workers: int = 0
+    checkpoint_interval: int = 100
     loss_function_params: None | dict = None
 
     def __init__(self, config: dict):
@@ -118,6 +119,8 @@ class TrainingConfigSessionDict:
         if not isinstance(self.dataloader_num_workers, int):
             return False
         if self.dataloader_num_workers < 0:
+            return False
+        if type(self.checkpoint_interval) is not int or self.checkpoint_interval <= 0:
             return False
         if self.loss_function_params is not None:
             if not isinstance(self.loss_function_params, dict):
