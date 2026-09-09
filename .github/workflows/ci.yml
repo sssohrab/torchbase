@@ -104,7 +104,7 @@ jobs:
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13' && matrix.dependencies == 'locked'
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
