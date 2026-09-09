@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.13"
@@ -71,7 +71,7 @@ jobs:
       COVERAGE_FILE: ${{ github.workspace }}/.coverage
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python }}
@@ -120,4 +120,9 @@ jobs:
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           TEST_RESULT: ${{ needs.tests.result }}
-        run: test "$BUILD_RESULT" = success && test "$TEST_RESULT" = success
+        run: |
+          echo "build=$BUILD_RESULT, tests=$TEST_RESULT"
+          if [[ "$BUILD_RESULT" != "success" || "$TEST_RESULT" != "success" ]]; then
+            echo "::error::CI failed: build=$BUILD_RESULT, tests=$TEST_RESULT. Inspect the failed upstream job for the cause."
+            exit 1
+          fi
