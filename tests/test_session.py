@@ -1,5 +1,5 @@
 from torchbase.session import TrainingBaseSession
-from torchbase.session import SAVED_RNG_NAME
+from torchbase.session import SAVED_RNG_NAME, SAVED_NETWORK_NAME
 from torchbase.utils.data import ValidationDatasetsDict, split_iterables
 
 from torchbase.utils.metrics import BaseMetricsClass
@@ -20,6 +20,7 @@ import shutil
 import time
 import json
 import inspect
+import tempfile
 
 TEST_STORAGE_DIR = os.path.join(os.path.split(os.path.abspath(__file__))[0], "storage")
 os.makedirs(TEST_STORAGE_DIR, exist_ok=True)
@@ -551,6 +552,53 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
 
     def test_do_training(self):
         self.session.train()
+
+
+class TrainingBaseSessionModelSelectionUnitTest(unittest.TestCase):
+    def test_worse_validation_epoch_preserves_best_model(self):
+        class ControlledTrainingSession(ExampleTrainingSessionClassStatic):
+            def init_datasets(self):
+                dataset = Dataset.from_dict({"inputs": [0.0]})
+                return dataset, ValidationDatasetsDict(
+                    datasets=(dataset,), only_for_demo=(False,), names=("valid",)
+                )
+
+            def init_network(self):
+                return torch.nn.Linear(1, 1, bias=False)
+
+            def do_one_training_epoch(self):
+                # Distinct weights identify which epoch was saved, without training noise.
+                with torch.no_grad():
+                    self.network.weight.fill_(self.progress_train.epoch + 1)
+                self.progress_train.increment_iter(1)
+                self.value_logger_train.update({"loss": 1.0})
+                self.progress_train.increment_epoch()
+
+            def do_one_validation_epoch(self, valid_dataset_name):
+                progress = self.progress_valid_dict[valid_dataset_name]
+                loss = (1.0, 0.5, 0.75)[progress.epoch]
+                progress.increment_iter(1)
+                self.value_logger_valid_dict[valid_dataset_name].update({"loss": loss})
+                progress.increment_epoch()
+
+        config = ControlledTrainingSession.get_config()
+        config["session"].update(device_name="cpu", num_epochs=3)
+        config["network"] = {"architecture": "Linear"}
+
+        storage = tempfile.TemporaryDirectory()
+        self.addCleanup(storage.cleanup)
+        session = ControlledTrainingSession(config=config, runs_parent_dir=storage.name)
+        self.addCleanup(session.writer.close)
+
+        session.train()
+
+        self.assertEqual(session.progress_train.epoch, 3)
+        self.assertEqual(session.best_validation_loss_dict["valid"], (0.5, 1))
+        self.assertTrue(torch.equal(session.network.weight, torch.tensor([[3.0]])))
+        saved_model = torch.load(
+            os.path.join(session.run_dir, SAVED_NETWORK_NAME), map_location="cpu", weights_only=True
+        )
+        self.assertTrue(torch.equal(saved_model["weight"], torch.tensor([[2.0]])))
 
 
 if __name__ == "__main__":
