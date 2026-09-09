@@ -235,19 +235,52 @@ logged parameters, judge whether you are going over- or under-fit, or decide the
 experiments.
 
 For various reasons, you may sometimes want to suspend the training process before it is finalized. `torchbase` provides
-you with the possibility to take-over from a past experiment and recover (almost) exactly what was going on:
+you with the possibility to take over from a past experiment, provided that its saved states correspond to a completed
+epoch, including both training and validation:
 
 ```python
 the_recovered_session = MyTrainingSession(same_config_as_before,
                                           source_run_dir_tag=the_tag_to_the_suspended_experiment,
                                           create_run_dir_afresh=False)
 
-the_recovered_session()  # This will continue the suspended session where it stopped without creating a new run dir.
+the_recovered_session()  # This will continue after the saved epoch without creating a new run dir.
 ```
+
+This recovers not only the network weights and the optimizer, but also the progress counters and the logged values for
+training and each validation dataset. You should keep the experimental setup and its configuration the same, although
+you may increase `num_epochs` if you want to train for longer. Note that this specifies the total number of epochs, not
+the number of additional ones. So if you have already finished 10 epochs and now specify 15, another 5 epochs will be
+run. If the requested number of epochs has already been reached, no further training is performed.
+
+There are two different points where the state of randomness matters here. First, you want to reconstruct the same
+datasets and network setup as when the experiment was initialized, e.g., with the same random split of the data. Then,
+when you continue training, you want the random sequence to take over from where it was saved, rather than starting
+over again. For this reason, the original `states/rng_states.json` is kept for initialization, while a separate
+`states/rng_states_continuation.json` is restored after initialization and refreshed when validation has finished.
+
+This continuation is tested on CPU with the default dataloaders and `dataloader_num_workers=0`, keeping the data, code
+and dependencies unchanged. If you use your own random generators, datasets with internal state, worker processes or
+accelerator-specific randomness, additional states may need to be saved. In particular, you should not expect identical
+results across different platforms or PyTorch versions. Experiments saved with v0.1.4 or earlier do not have the second
+randomness file. Their available states can still be recovered if the required files are present and describe a
+completed epoch, but a warning is issued since their original random sequence cannot be recovered. Missing progress
+or logger files raise an error instead of silently resetting their values.
+
+Importantly, recovery from an arbitrary interruption is not yet fully supported. Suppose you have finished epoch `n`
+and the process stops after several iterations of epoch `n+1`. If the saved states still correspond to epoch `n`, you
+can recover from there, but those extra iterations will have to be repeated. If a periodic save has already overwritten
+them with states from the unfinished epoch, recovery is rejected: the counters alone cannot reconstruct the position
+in the shuffled dataloader. The same applies when the saved training and validation counters refer to different epochs.
+There is currently no automatic fallback to the previous completed epoch, and an interruption while writing the state
+files can leave them inconsistent. Preserving a complete recovery point, along with fixing the saved best-model
+metadata, is tracked in [#32](https://github.com/sssohrab/torchbase/issues/32). For now, keep a backup of an existing run
+before continuing it.
 
 Alternatively, passing the flag `create_run_dir_afresh=True`, but still specifying a `source_run_dir_tag` will create a
 new experiment starting from scratch but only initializing the weights of the network with the previously-trained ones
-from the source run.
+from the source run's latest `states/network.pth`. In this case, you are starting a new experiment rather than continuing
+the old one: the optimizer, progress counters, logged values and best-loss tracking all start afresh, and the source
+run's randomness state is not restored.
 
 As a general note, other than the config parameters which are accessible to all member methods, you may want to pass
 some new members to the class accessible to all methods. In this case, you can re-implement the `__init__` method with

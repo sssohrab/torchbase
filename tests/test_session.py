@@ -173,7 +173,7 @@ class TrainingBaseSessionStaticUnitTest(unittest.TestCase):
             loss.backward()
             cls.session_fresh_run_fresh_network.optimizer.step()
 
-        cls.session_fresh_run_fresh_network.save_network_and_optimizer_states()
+        cls.session_fresh_run_fresh_network.save_training_states()
         for valid_dataset_name in cls.session_fresh_run_fresh_network.datasets_valid_dict.names:
             cls.session_fresh_run_fresh_network.save_progress_and_log_states_for_valid_set(valid_dataset_name)
 
