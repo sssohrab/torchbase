@@ -5,6 +5,7 @@ from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.metrics import BaseMetricsClass
 from torchbase.utils.networks import load_network_from_state_dict_to_device
 from torchbase.utils.logger import ProgressManager, ValuesLogger, LoggableParams
+from torchbase.utils.checkpoint import atomic_torch_save
 
 import numpy as np
 import torch
@@ -27,7 +28,7 @@ SAVED_NETWORK_NAME = "network.pth"
 SAVED_OPTIMIZER_NAME = "optimizer.pth"
 SAVED_RNG_NAME = "rng_states.json"
 SAVED_CONTINUATION_RNG_NAME = "rng_states_continuation.json"
-ITERATION_STEPS_TO_SAVE_STATES = 10
+SAVED_CHECKPOINT_NAME = "checkpoint.pth"
 DO_LOG_HPARAMS = True
 
 
@@ -56,6 +57,8 @@ class TrainingBaseSession(ABC):
 
         self.optimizer = self.init_optimizer()
 
+        self._loaded_checkpoint = None
+        self.best_model_epoch = None
         self.load_network_and_optimizer_states_if_relevant(source_run_dir_tag, create_run_dir_afresh)
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
@@ -90,6 +93,7 @@ class TrainingBaseSession(ABC):
             except Exception:
                 self.writer.close()
                 raise
+        self._loaded_checkpoint = None
 
     @staticmethod
     def print(report: str, end: str | None = None) -> None:
@@ -165,6 +169,9 @@ class TrainingBaseSession(ABC):
             raise FileNotFoundError("The randomness states file does not exist under the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
 
+        if os.path.exists(os.path.join(source_states_dir, SAVED_CHECKPOINT_NAME)):
+            return
+
         if not os.path.exists(os.path.join(source_states_dir, SAVED_NETWORK_NAME)):
             raise FileNotFoundError("The saved network's `states_dict` does not exist under the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
@@ -189,11 +196,14 @@ class TrainingBaseSession(ABC):
 
             return best_validation_loss_dict
         else:
+            if self._loaded_checkpoint is not None:
+                return {name: tuple(value) for name, value in
+                        self._loaded_checkpoint["best_validation_loss_dict"].items()}
             states_dir_path = os.path.join(self.run_dir, "states")
             with open(os.path.join(states_dir_path, "best_validation_loss_dict.json"), "r") as f:
                 best_validation_loss_dict = json.load(f)
 
-            return best_validation_loss_dict
+            return {name: tuple(value) for name, value in best_validation_loss_dict.items()}
 
     @staticmethod
     def configure_states_dir_and_randomness_sources(run_dir: str, create_run_dir_afresh: bool) -> None:
@@ -303,6 +313,21 @@ class TrainingBaseSession(ABC):
             return
 
         source_states_dir_path = os.path.join(os.path.dirname(self.run_dir), source_run_dir_tag, "states")
+        checkpoint_path = os.path.join(source_states_dir_path, SAVED_CHECKPOINT_NAME)
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            required = {"format_version", "network", "optimizer", "progress_train", "values_logger_train",
+                        "validation", "best_validation_loss_dict", "best_model", "best_model_epoch", "rng_state"}
+            if not isinstance(checkpoint, dict) or not required.issubset(checkpoint):
+                raise ValueError("Incomplete checkpoint: required training state is missing.")
+            if checkpoint["format_version"] != 1:
+                raise ValueError("Unsupported checkpoint format version: {}".format(checkpoint["format_version"]))
+            self.network.load_state_dict(checkpoint["network"])
+            if not create_run_dir_afresh:
+                self.optimizer.load_state_dict(checkpoint["optimizer"])
+                self._loaded_checkpoint = checkpoint
+            return
+
         self.network = load_network_from_state_dict_to_device(
             self.network,
             state_dict_path=os.path.join(source_states_dir_path, SAVED_NETWORK_NAME),
@@ -318,6 +343,28 @@ class TrainingBaseSession(ABC):
     def _restore_training_state(self) -> None:
         """Restore completed-epoch progress, logs, and continuation RNG after initialization."""
         states_dir = os.path.join(self.run_dir, "states")
+        checkpoint = self._loaded_checkpoint
+        if checkpoint is not None:
+            if set(checkpoint["validation"]) != set(self.datasets_valid_dict.names):
+                raise ValueError("Checkpoint validation datasets do not match the current session.")
+            participating = {name for name, demo in zip(self.datasets_valid_dict.names,
+                                                       self.datasets_valid_dict.only_for_demo) if not demo}
+            if set(self.best_validation_loss_dict) != participating:
+                raise ValueError("Checkpoint model-selection datasets do not match the current session.")
+            self.progress_train.load_state_dict(checkpoint["progress_train"])
+            self.value_logger_train.load_state_dict(checkpoint["values_logger_train"])
+            for name, state in checkpoint["validation"].items():
+                self.progress_valid_dict[name].load_state_dict(state["progress"])
+                self.value_logger_valid_dict[name].load_state_dict(state["values_logger"])
+            self._require_completed_epoch()
+            self.best_model_epoch = checkpoint["best_model_epoch"]
+            # The inference export may lag behind if the process stopped after
+            # committing the checkpoint but before replacing the export.
+            if checkpoint["best_model"] is not None:
+                atomic_torch_save(checkpoint["best_model"], os.path.join(self.run_dir, SAVED_NETWORK_NAME))
+            RandomnessGeneratorStates.from_dict(checkpoint["rng_state"]).apply()
+            return
+
         self.progress_train.set_fields_from_disk(os.path.join(states_dir, "progress_manager_train.json"))
         self.value_logger_train.set_state_values_from_disk(os.path.join(states_dir, "values_logger_train.json"))
         for name in self.datasets_valid_dict.names:
@@ -326,14 +373,7 @@ class TrainingBaseSession(ABC):
             self.value_logger_valid_dict[name].set_state_values_from_disk(
                 os.path.join(states_dir, "values_logger_valid_{}.json".format(name)))
 
-        # A shuffled dataloader cannot recover a partial epoch from counters alone.
-        progress_managers = [self.progress_train, *self.progress_valid_dict.values()]
-        if any(progress.iter_current_epoch != 0 or progress.samples_current_epoch != 0
-               or progress.epoch != self.progress_train.epoch for progress in progress_managers):
-            raise ValueError(
-                "Resume requires a completed training-and-validation epoch. This checkpoint is partial or "
-                "has inconsistent epoch counters; dataloader positions are not saved. Use an intact "
-                "completed-epoch checkpoint, or start a new run with these weights.")
+        self._require_completed_epoch()
 
         continuation_rng_path = os.path.join(states_dir, SAVED_CONTINUATION_RNG_NAME)
         if os.path.exists(continuation_rng_path):
@@ -343,6 +383,55 @@ class TrainingBaseSession(ABC):
                 "Checkpoint has no continuation RNG state (as in torchbase <=0.1.4). "
                 "Saved training state was restored, but the original random sequence cannot be recovered.",
                 RuntimeWarning, stacklevel=2)
+
+    def _require_completed_epoch(self) -> None:
+        # A shuffled dataloader cannot recover a partial epoch from counters alone.
+        progress_managers = [self.progress_train, *self.progress_valid_dict.values()]
+        if any(progress.iter_current_epoch != 0 or progress.samples_current_epoch != 0
+               or progress.epoch != self.progress_train.epoch for progress in progress_managers):
+            raise ValueError(
+                "Resume requires a completed training-and-validation epoch. This checkpoint is partial or "
+                "has inconsistent epoch counters; dataloader positions are not saved. Use an intact "
+                "completed-epoch checkpoint, or start a new run with these weights.")
+
+    def _save_checkpoint(self, *, is_best: bool = False) -> None:
+        """Commit one recovery point, including the selected inference model."""
+        self._require_completed_epoch()
+        best_path = os.path.join(self.run_dir, SAVED_NETWORK_NAME)
+        checkpoint_path = os.path.join(self.run_dir, "states", SAVED_CHECKPOINT_NAME)
+        network_state = self.network.state_dict()
+        if is_best:
+            best_model = network_state
+            best_model_epoch = self.progress_train.epoch - 1
+        elif os.path.exists(checkpoint_path):
+            # The export is only a convenience copy: it may have been removed
+            # or its write interrupted. Carry forward the authoritative best.
+            previous = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            best_model = previous["best_model"]
+            best_model_epoch = previous["best_model_epoch"]
+            del previous
+        else:
+            best_model = (torch.load(best_path, map_location="cpu", weights_only=True)
+                          if os.path.exists(best_path) else None)
+            best_model_epoch = self.best_model_epoch
+        checkpoint = {
+            "format_version": 1,
+            "network": network_state,
+            "optimizer": self.optimizer.state_dict(),
+            "progress_train": self.progress_train.state_dict(),
+            "values_logger_train": self.value_logger_train.state_dict(),
+            "validation": {name: {"progress": self.progress_valid_dict[name].state_dict(),
+                                  "values_logger": self.value_logger_valid_dict[name].state_dict()}
+                           for name in self.datasets_valid_dict.names},
+            "best_validation_loss_dict": self.best_validation_loss_dict,
+            "best_model": best_model,
+            "best_model_epoch": best_model_epoch,
+            "rng_state": RandomnessGeneratorStates().to_dict(),
+        }
+        atomic_torch_save(checkpoint, checkpoint_path)
+        self.best_model_epoch = best_model_epoch
+        if is_best:
+            atomic_torch_save(best_model, best_path)
 
     @abstractmethod
     def init_metrics(self) -> List[BaseMetricsClass] | None:
@@ -405,6 +494,7 @@ class TrainingBaseSession(ABC):
             shutil.rmtree(hparams_event_dir)
 
     def save_training_states(self) -> None:
+        """Write legacy diagnostic files; these do not replace the resumable checkpoint."""
         states_dir_path = os.path.join(self.run_dir, "states")
         torch.save(self.network.state_dict(), os.path.join(states_dir_path, SAVED_NETWORK_NAME))
         torch.save(self.optimizer.state_dict(), os.path.join(states_dir_path, SAVED_OPTIMIZER_NAME))
@@ -417,6 +507,7 @@ class TrainingBaseSession(ABC):
         RandomnessGeneratorStates().save(os.path.join(states_dir_path, SAVED_CONTINUATION_RNG_NAME))
 
     def save_progress_and_log_states_for_valid_set(self, valid_dataset_name: str):
+        """Write legacy validation files; these do not replace the resumable checkpoint."""
         states_dir_path = os.path.join(self.run_dir, "states")
         self.progress_valid_dict[valid_dataset_name].serialize_to_disk(
             os.path.join(states_dir_path, "progress_manager_valid_{}.json".format(valid_dataset_name)))
@@ -507,8 +598,6 @@ class TrainingBaseSession(ABC):
         # TODO (#13): Progress bar à la tqdm?
         for (ind, mini_batch) in enumerate(self.dataloader_train):
             self.do_one_training_iteration(mini_batch)
-            if self.progress_train.iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
-                self.save_training_states()
             for param in self.value_logger_train.names:
                 self.writer.add_scalar("training/{}/epochs".format(param),
                                        self.value_logger_train.average_of_epoch[param],
@@ -530,8 +619,6 @@ class TrainingBaseSession(ABC):
         start_iter_index = self.progress_valid_dict[valid_dataset_name].iter_current_epoch
         for (ind, mini_batch) in enumerate(self.dataloader_valid_dict[valid_dataset_name]):
             self.do_one_validation_iteration(mini_batch, valid_dataset_name)
-            if self.progress_valid_dict[valid_dataset_name].iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
-                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
 
             for param in self.value_logger_valid_dict[valid_dataset_name].names:
                 self.writer.add_scalar("validation-{}/{}/epochs".format(valid_dataset_name, param),
@@ -554,12 +641,13 @@ class TrainingBaseSession(ABC):
 
     def train(self):
         start_epoch_index = self.progress_train.epoch
-        model_saved_at_iteration: int | None = None
+        # Preserve the initialized state too, so an interrupted first epoch can restart.
+        if not os.path.exists(os.path.join(self.run_dir, "states", SAVED_CHECKPOINT_NAME)):
+            self._save_checkpoint()
 
         for i_epoch in range(start_epoch_index, self.config_session.num_epochs):
             self.value_logger_train.reset_epoch()
             self.do_one_training_epoch()
-            self.save_training_states()
             self.print("\t === averaged over this epoch = {:.5f} === ".format(
                 self.value_logger_train.average_of_epoch["loss"]))
 
@@ -570,7 +658,6 @@ class TrainingBaseSession(ABC):
 
                 self.value_logger_valid_dict[valid_dataset_name].reset_epoch()
                 self.do_one_validation_epoch(valid_dataset_name)
-                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
                 self.print("\t === averaged over this epoch = {:.5f} === ".format(
                     self.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"]))
 
@@ -591,11 +678,10 @@ class TrainingBaseSession(ABC):
                         self.print("Voting AGAINST this model.")
                         vote_for_epoch_as_successful.append(False)
 
-            if all(vote_for_epoch_as_successful):
-                torch.save(self.network.state_dict(), os.path.join(self.writer.log_dir, SAVED_NETWORK_NAME))
+            is_best = all(vote_for_epoch_as_successful)
+            self._save_checkpoint(is_best=is_best)
 
-                model_saved_at_iteration = i_epoch
-
+            if is_best:
                 if DO_LOG_HPARAMS:
                     self.cleanup_previous_hparam_events_if_any()
                     self.writer.add_hparams(hparam_dict=self.hparams_dict,
@@ -606,13 +692,9 @@ class TrainingBaseSession(ABC):
                     i_epoch + 1, self.config_session.num_epochs))
             self.print("\n")
 
-            # Validation may consume randomness too. Keep the initialization RNG
-            # untouched and capture the state used to start the next epoch.
-            RandomnessGeneratorStates().save(os.path.join(self.run_dir, "states", SAVED_CONTINUATION_RNG_NAME))
-
         self.print("\nThis is the end of training and validation.")
-        if model_saved_at_iteration is not None:
-            self.print("The best model was saved at iteration {}/{}.".format(model_saved_at_iteration + 1,
+        if self.best_model_epoch is not None:
+            self.print("The best model was saved at epoch {}/{}.".format(self.best_model_epoch + 1,
                                                                              self.config_session.num_epochs))
             # TODO: JIT-compilation of the final saved model.2
 
@@ -621,9 +703,5 @@ class TrainingBaseSession(ABC):
     def __call__(self):
         try:
             self.train()
-        except BaseException as e:
-            if not os.path.exists(os.path.join(self.run_dir, "states", SAVED_NETWORK_NAME)):
-                shutil.rmtree(self.run_dir)
-                self.print("Removed this run's log-dir altogether, since encountered the exception {}, "
-                           "before any useful state could be saved.".format(type(e).__name__))
-            raise e
+        finally:
+            self.writer.close()
