@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 - 2026-09-09
 
 - Adopt standard project metadata and uv for development, with a committed
   dependency lock. Retain `poetry-core` for builds.
