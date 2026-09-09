@@ -382,10 +382,13 @@ any other library mentioned above.
 
 ## Contributing
 
+See the [contributor guide](https://github.com/sssohrab/torchbase/blob/main/CONTRIBUTING.md)
+for development setup, the [release guide](https://github.com/sssohrab/torchbase/blob/main/RELEASING.md)
+for publishing, and the [changelog](https://github.com/sssohrab/torchbase/blob/main/CHANGELOG.md)
+for release history.
+
 This is an early stage project and welcomes community contributions and improvement proposals. Feel free to:
 
 - Open a [GitHub issue](https://github.com/sssohrab/torchbase/issues).
 - Submit a pull request with your proposed changes.
 - Reach out directly to the owner of the project via [email](mailto:sohrab.ferdowsi@gmail.com).
-
-
