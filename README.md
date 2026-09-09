@@ -247,39 +247,59 @@ the_recovered_session()  # This will continue after the saved epoch without crea
 ```
 
 This recovers not only the network weights and the optimizer, but also the progress counters and the logged values for
-training and each validation dataset. You should keep the experimental setup and its configuration the same, although
-you may increase `num_epochs` if you want to train for longer. Note that this specifies the total number of epochs, not
+training and each validation dataset, along with the best validation losses and their epochs. You should keep the
+experimental setup and its configuration the same, although you may increase `num_epochs` if you want to train for
+longer. Note that this specifies the total number of epochs, not
 the number of additional ones. So if you have already finished 10 epochs and now specify 15, another 5 epochs will be
 run. If the requested number of epochs has already been reached, no further training is performed.
 
 There are two different points where the state of randomness matters here. First, you want to reconstruct the same
 datasets and network setup as when the experiment was initialized, e.g., with the same random split of the data. Then,
 when you continue training, you want the random sequence to take over from where it was saved, rather than starting
-over again. For this reason, the original `states/rng_states.json` is kept for initialization, while a separate
-`states/rng_states_continuation.json` is restored after initialization and refreshed when validation has finished.
+over again. For this reason, the original `states/rng_states.json` is kept for initialization, while the continuation
+randomness is saved together with the training state in `states/checkpoint.pth` and restored after initialization.
 
 This continuation is tested on CPU with the default dataloaders and `dataloader_num_workers=0`, keeping the data, code
 and dependencies unchanged. If you use your own random generators, datasets with internal state, worker processes or
 accelerator-specific randomness, additional states may need to be saved. In particular, you should not expect identical
-results across different platforms or PyTorch versions. Experiments saved with v0.1.4 or earlier do not have the second
-randomness file. Their available states can still be recovered if the required files are present and describe a
-completed epoch, but a warning is issued since their original random sequence cannot be recovered. Missing progress
-or logger files raise an error instead of silently resetting their values.
+results across different platforms or PyTorch versions.
 
-Importantly, recovery from an arbitrary interruption is not yet fully supported. Suppose you have finished epoch `n`
-and the process stops after several iterations of epoch `n+1`. If the saved states still correspond to epoch `n`, you
-can recover from there, but those extra iterations will have to be repeated. If a periodic save has already overwritten
-them with states from the unfinished epoch, recovery is rejected: the counters alone cannot reconstruct the position
-in the shuffled dataloader. The same applies when the saved training and validation counters refer to different epochs.
-There is currently no automatic fallback to the previous completed epoch, and an interruption while writing the state
-files can leave them inconsistent. Preserving a complete recovery point, along with fixing the saved best-model
-metadata, is tracked in [#32](https://github.com/sssohrab/torchbase/issues/32). For now, keep a backup of an existing run
-before continuing it.
+Suppose you have finished epoch `n` and the process stops after several iterations of epoch `n+1`, or during its
+validation. The saved checkpoint still corresponds to epoch `n`, so you can recover from there and repeat the
+unfinished epoch. An initial checkpoint is also saved before training starts, in case the first epoch is interrupted.
+The checkpoint is replaced only after training, all validation datasets and the model-selection decision have
+finished. It is first written to a temporary file in the same directory and then atomically moved into place, so an
+interrupted write does not overwrite the previous checkpoint. Leftover temporary files are ignored on recovery.
+This assumes one process writing to the run directory and a filesystem supporting atomic replacement; it is not a
+substitute for backups against disk corruption or storage failure. TensorBoard event files are separate from the
+checkpoint and may still contain entries from the unfinished work that will be repeated.
+
+The latest training state and the best model serve different purposes. The checkpoint contains both, while
+`network.pth` directly under the run directory remains the weights-only file you may use for inference. With multiple
+validation datasets, each participating dataset keeps its own lowest loss and the epoch where it occurred. The model
+is selected only when all participating datasets improve their previous lowest losses in the same epoch; datasets
+marked `only_for_demo` do not take part in this decision. Therefore, these individual records need not refer to the
+selected model's epoch, which is saved separately as `best_model_epoch` (zero-based, like the loss records). The best
+weights are included in the checkpoint so that recovery can restore the inference file too, if its export was
+interrupted. This also means the checkpoint can contain two sets of network weights when the latest and best differ.
+
+Older runs using separate state files can still be recovered if their required files are present and describe a
+completed training-and-validation epoch. A partial or inconsistent old checkpoint is rejected, since counters alone
+cannot reconstruct the position in the shuffled dataloader. Runs without continuation randomness states, including
+v0.1.4 and earlier, issue a warning because their original random sequence cannot be recovered. Missing progress or
+logger files raise an error instead of silently resetting their values. Continuing an old run creates the new
+checkpoint; once present, it takes precedence over the old files, and an invalid new checkpoint raises an error rather
+than falling back to potentially outdated states. The old `save_training_states()` and
+`save_progress_and_log_states_for_valid_set()` methods remain available for writing the separate files, but are no
+longer called automatically and do not update the new recovery point. Keep a backup before upgrading an existing run;
+older torchbase versions cannot read the new checkpoint format. The selected epoch of an imported legacy best model
+is left unknown until a new best model is selected, since the old files did not reliably record it.
 
 Alternatively, passing the flag `create_run_dir_afresh=True`, but still specifying a `source_run_dir_tag` will create a
 new experiment starting from scratch but only initializing the weights of the network with the previously-trained ones
-from the source run's latest `states/network.pth`. In this case, you are starting a new experiment rather than continuing
-the old one: the optimizer, progress counters, logged values and best-loss tracking all start afresh, and the source
+from the source run's latest completed checkpoint (or `states/network.pth` for an older run). In this case, you are
+starting a new experiment rather than continuing the old one: the optimizer, progress counters, logged values and
+best-loss tracking all start afresh, and the source
 run's randomness state is not restored.
 
 As a general note, other than the config parameters which are accessible to all member methods, you may want to pass
