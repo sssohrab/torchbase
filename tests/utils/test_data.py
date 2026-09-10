@@ -10,7 +10,33 @@ from enum import Enum
 from dataclasses import dataclass
 
 from io import StringIO
+from itertools import product
 import random
+
+
+class SizedOneShotIterator:
+    def __init__(self):
+        self.values = iter([1, 2])
+        self.reads = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.reads += 1
+        return next(self.values)
+
+    def __len__(self):
+        return 2
+
+
+class UnsizedIterable:
+    def __init__(self):
+        self.iterations = 0
+
+    def __iter__(self):
+        self.iterations += 1
+        return iter([1, 2])
 
 
 class SplittingTests(unittest.TestCase):
@@ -73,6 +99,31 @@ class SplittingTests(unittest.TestCase):
 
         self.assertEqual(len(split_1), 0)
         self.assertEqual(len(split_2), 0)
+
+    def test_empty_dictionary_and_empty_columns(self):
+        self.assertEqual(split_iterables({}, (0.5, 0.5)), ({}, {}))
+        self.assertEqual(split_iterables({"x": [], "y": ()}, (0.5, 0.5)),
+                         ({"x": [], "y": []}, {"x": [], "y": []}))
+        self.assertEqual(split_to_train_valid_test({}), ({}, {}, {}))
+
+    def test_empty_dictionary_still_validates_portions(self):
+        for portions, error in (((), TypeError), ((0.0, 0.0), ValueError), ((1.0, -0.5), ValueError)):
+            with self.subTest(portions=portions), self.assertRaises(error):
+                split_iterables({}, portions)
+
+    def test_generators_are_materialized_without_losing_items(self):
+        self.assertEqual(split_iterables((i for i in range(6)), (0.5, 0.5), shuffle=False),
+                         ([0, 1, 2], [3, 4, 5]))
+        values = {"x": (i for i in range(6)), "y": (i + 10 for i in range(6))}
+        self.assertEqual(split_iterables(values, (0.5, 0.5), shuffle=False),
+                         ({"x": [0, 1, 2], "y": [10, 11, 12]},
+                          {"x": [3, 4, 5], "y": [13, 14, 15]}))
+
+    def test_shuffled_generator_columns_stay_aligned(self):
+        parts = split_iterables({"x": iter(range(10)), "y": (i + 10 for i in range(10))}, (0.6, 0.4))
+        self.assertEqual(sorted(parts[0]["x"] + parts[1]["x"]), list(range(10)))
+        for part in parts:
+            self.assertEqual(part["y"], [i + 10 for i in part["x"]])
 
     def test_split_to_train_valid_test_valid(self):
         train, valid, test = split_iterables(self.data_file, (0.7, 0.15, 0.15))
@@ -195,6 +246,62 @@ class TypedDictUnitTest(unittest.TestCase):
 
 
 class TypedDictIterableUnitTest(unittest.TestCase):
+    def test_one_shot_inputs_are_rejected_without_consumption(self):
+        validator = TypedDictIterable({"x": int})
+        for make_iterator in (lambda: (i for i in [1, 2]), lambda: iter([1, 2]), SizedOneShotIterator):
+            for method in (validator, lambda data: validator.check_type("x", data["x"])):
+                value = make_iterator()
+                with self.subTest(iterator=type(value)), self.assertRaisesRegex(TypeError, "one-shot"):
+                    method({"x": value})
+                if isinstance(value, SizedOneShotIterator):
+                    self.assertEqual(value.reads, 0)
+                self.assertEqual(list(value), [1, 2])
+
+    def test_file_iterator_is_rejected_without_consumption(self):
+        value = StringIO("first\nsecond\n")
+        with self.assertRaisesRegex(TypeError, "one-shot"):
+            TypedDictIterable({"x": str})({"x": value})
+        self.assertEqual(value.tell(), 0)
+
+    def test_unsized_reiterable_is_rejected_clearly(self):
+        value = UnsizedIterable()
+        with self.assertRaisesRegex(TypeError, "sized"):
+            TypedDictIterable({"x": int})({"x": value})
+        self.assertEqual(value.iterations, 0)
+
+    def test_sized_collections_are_preserved_and_can_be_validated_again(self):
+        validator = TypedDictIterable({"x": int, "y": int, "z": int})
+        data = {"x": [1, 2], "y": (3, 4), "z": range(2)}
+        for _ in range(2):
+            self.assertIs(validator(data), data)
+            self.assertIs(validator(data)["y"], data["y"])
+
+    def test_empty_columns_and_empty_schema(self):
+        data = {"x": [], "y": ()}
+        self.assertIs(TypedDictIterable({"x": int, "y": str})(data), data)
+        self.assertEqual(TypedDictIterable({})({}), {})
+        with self.assertRaises(ValueError):
+            TypedDictIterable({"x": int, "y": int})({"x": [], "y": [1]})
+        with self.assertRaises(KeyError):
+            TypedDictIterable({"x": int})({})
+
+    def test_union_type_errors_do_not_raise_attribute_errors(self):
+        validator = TypedDictIterable({"x": int | None})
+        self.assertEqual(validator({"x": [1, None]}), {"x": [1, None]})
+        for value in (["wrong"], "wrong", 1, None):
+            with self.subTest(value=value), self.assertRaises(TypeError):
+                validator({"x": value})
+
+    def test_rejected_data_assignment_preserves_previous_data_and_iterator(self):
+        validator = TypedDictIterable({"x": int})
+        previous = {"x": [1, 2]}
+        validator.data = previous
+        values = iter([3, 4])
+        with self.assertRaisesRegex(TypeError, "one-shot"):
+            validator.data = {"x": values}
+        self.assertIs(validator.data, previous)
+        self.assertEqual(list(values), [3, 4])
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.typed_dict_iterable = TypedDictIterable({
@@ -282,6 +389,29 @@ class TypedDictIterableUnitTest(unittest.TestCase):
 
 
 class ValidationDatasetsDictUnitTest(unittest.TestCase):
+    def test_all_tuple_length_combinations(self):
+        dataset = Dataset.from_dict({"data": [1]})
+        for sizes in product(range(4), repeat=3):
+            with self.subTest(sizes=sizes):
+                datasets, flags, names = sizes
+                config = ValidationDatasetsDict((dataset,) * datasets, (False,) * flags,
+                                                tuple("valid-{}".format(i) for i in range(names)))
+                self.assertEqual(config.is_valid(), datasets == flags == names and datasets > 0)
+
+    def test_duplicate_names_are_rejected_including_demo_sets(self):
+        dataset = Dataset.from_dict({"data": [1]})
+        config = ValidationDatasetsDict((dataset, dataset), (False, True), ("valid", "valid"))
+        self.assertFalse(config.is_valid())
+
+    def test_empty_datasets_are_rejected(self):
+        empty = Dataset.from_dict({"data": []})
+        self.assertFalse(ValidationDatasetsDict((empty,), (False,), ("valid",)).is_valid())
+        self.assertFalse(ValidationDatasetsDict((empty,), (True,), ("demo",)).is_valid())
+
+    def test_same_dataset_can_have_distinct_validation_names(self):
+        dataset = Dataset.from_dict({"data": [1]})
+        self.assertTrue(ValidationDatasetsDict((dataset, dataset), (False, True), ("valid", "demo")).is_valid())
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.dataset_valid_1 = Dataset.from_dict({"data": [random.randint(0, 100) for _ in range(10)]})

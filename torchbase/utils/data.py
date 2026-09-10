@@ -3,6 +3,7 @@ from datasets import Dataset
 from typing import Tuple, Iterable, List, Any, Dict, Type, get_args
 import types
 from dataclasses import dataclass
+from collections.abc import Iterator, Sized
 
 import random
 
@@ -55,13 +56,16 @@ def split_iterables(
         input_: Iterable[Any] | Dict[str, Iterable[Any]],
         portions: Tuple[float, ...], shuffle: bool = True
 ) -> Tuple[List[Any], ...] | Tuple[Dict[str, List[Any]], ...]:
+    """Materialize and split inputs; empty inputs yield one empty result per portion."""
     if isinstance(input_, dict):
+        if not input_:
+            return tuple({} for _ in _split_iterable([], portions, shuffle=False))
         if not all(isinstance(v, Iterable) for v in input_.values()):
             raise TypeError("All values in the dictionary must be iterables.")
 
         input_ = {k: _iterable_to_list(v) for k, v in input_.items()}
 
-        lengths = {len(list(v)) for v in input_.values()}
+        lengths = {len(v) for v in input_.values()}
         if len(lengths) > 1:
             raise ValueError("All iterables in the dictionary must have the same length.")
 
@@ -134,6 +138,11 @@ class TypedDict:
 
 
 class TypedDictIterable(TypedDict):
+    """Validate equal-length, sized, re-iterable columns without replacing them.
+
+    Empty columns are allowed. One-shot iterators are rejected before reading;
+    callers can explicitly materialize them as lists if appropriate.
+    """
 
     def __init__(self, type_dict: Dict[str, Type]):
         super().__init__(type_dict)
@@ -144,6 +153,7 @@ class TypedDictIterable(TypedDict):
             raise KeyError("`{}` not a recognized key.".format(key))
 
         expected_type = self.type_dict[key]
+        type_name = getattr(expected_type, "__name__", str(expected_type))
         none_allowed = type(None) in get_args(expected_type)
 
         if value is None and not none_allowed:
@@ -152,15 +162,19 @@ class TypedDictIterable(TypedDict):
         if isinstance(value, (str, bytes)):
             raise TypeError(
                 "Value for `{}` is expected to be an iterable of {}, got a string/bytes instead.".format(
-                    key, expected_type.__name__))
+                    key, type_name))
         if not isinstance(value, Iterable):
             raise TypeError(
                 "Value for `{}` is expected to be an iterable of {}, got non-iterable.".format(key,
-                                                                                               expected_type.__name__))
+                                                                                               type_name))
+        if isinstance(value, Iterator):
+            raise TypeError("Value for `{}` is a one-shot iterator; explicitly convert it to a list first.".format(key))
+        if not isinstance(value, Sized):
+            raise TypeError("Value for `{}` must be a sized, re-iterable collection.".format(key))
         for item in value:
             if not isinstance(item, expected_type):
                 raise TypeError(
-                    "Expected items in `{}` to be `{}`, got `{}` instead.".format(key, expected_type.__name__,
+                    "Expected items in `{}` to be `{}`, got `{}` instead.".format(key, type_name,
                                                                                   type(item).__name__))
 
     def __call__(self, data_dict: Dict[str, Iterable[Any]]) -> Dict[str, Iterable[Any]]:
@@ -171,7 +185,7 @@ class TypedDictIterable(TypedDict):
         last_iterable_length = -1
         for idx, (key, value) in enumerate(data_dict.items()):
             self.check_type(key, value)
-            this_iterable_length = len(list(value))
+            this_iterable_length = len(value)
             if idx != 0 and this_iterable_length != last_iterable_length:
                 raise ValueError("The length of all iterables over values must be the same.")
 
@@ -190,6 +204,7 @@ class TypedDictIterable(TypedDict):
 
 @dataclass
 class ValidationDatasetsDict:
+    """One or more nonempty validation datasets, with aligned flags and unique names."""
     datasets: Tuple[Dataset, ...]
     only_for_demo: Tuple[bool, ...]
     names: Tuple[str, ...]
@@ -207,7 +222,11 @@ class ValidationDatasetsDict:
             return False
         if any(not isinstance(name, str) for name in self.names):
             return False
-        if len(self.datasets) != len(self.only_for_demo) != len(self.names):
+        if not self.datasets or not (len(self.datasets) == len(self.only_for_demo) == len(self.names)):
+            return False
+        if len(set(self.names)) != len(self.names):
+            return False
+        if any(len(dataset) == 0 for dataset in self.datasets):
             return False
 
         return True
