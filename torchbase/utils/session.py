@@ -59,7 +59,7 @@ def is_custom_scalar_logging_layout_valid(layout: Dict,
                         return False
                     if tag.split("/")[1] not in ["loss"] + list(metric_names):
                         return False
-                    if tag.split("/")[2] not in ["epochs", "iterations"]:
+                    if tag.split("/")[2] not in ["epochs", "iterations", "batch_means"]:
                         return False
 
             elif isinstance(value, dict):

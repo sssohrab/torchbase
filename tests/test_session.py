@@ -484,8 +484,8 @@ class TrainingBaseSessionDynamicUnitTest(unittest.TestCase):
                 'Loss valid (with and without aug)': ['Line', ['validation-valid-with-aug/loss/epochs',
                                                                'validation-valid-no-aug/loss/epochs']],
 
-                'PSNR valid (with and without aug)': ['Line', ['validation-valid-with-aug/psnr/epochs',
-                                                               'validation-valid-no-aug/psnr/epochs']],
+                'PSNR valid (with and without aug)': ['Line', ['validation-valid-with-aug/psnr/batch_means',
+                                                               'validation-valid-no-aug/psnr/batch_means']],
 
             }
         }

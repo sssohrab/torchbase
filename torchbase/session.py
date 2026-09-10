@@ -67,9 +67,14 @@ class TrainingBaseSession(ABC):
         metrics_classes = self.init_metrics()
         self.metrics_functionals_dict = self.get_metrics_functionals_dict_from_metrics_classes(metrics_classes)
 
+        def new_epoch_metrics():
+            return {name: metric for group in metrics_classes or []
+                    for name, metric in group.get_epoch_metrics(self.config_metrics[type(group).__name__]).items()}
+
         self.progress_train = ProgressManager()
         self.loggable_train = LoggableParams({**{"loss": self.get_loss_value}, **self.metrics_functionals_dict})
-        self.value_logger_train = ValuesLogger(self.loggable_train.get_names(), progress_manager=self.progress_train)
+        self.value_logger_train = ValuesLogger(self.loggable_train.get_names(), progress_manager=self.progress_train,
+                                               epoch_metrics=new_epoch_metrics())
 
         self.progress_valid_dict = {valid_dataset_name: ProgressManager() for valid_dataset_name in
                                     self.datasets_valid_dict.names}
@@ -78,8 +83,14 @@ class TrainingBaseSession(ABC):
             for valid_dataset_name in self.datasets_valid_dict.names}
         self.value_logger_valid_dict = {
             valid_dataset_name: ValuesLogger(self.loggable_train.get_names(),
-                                             progress_manager=self.progress_valid_dict[valid_dataset_name]) for
+                                             progress_manager=self.progress_valid_dict[valid_dataset_name],
+                                             epoch_metrics=new_epoch_metrics()) for
             valid_dataset_name in self.datasets_valid_dict.names}
+        accumulators = [metric for logger in [self.value_logger_train, *self.value_logger_valid_dict.values()]
+                        for metric in logger.epoch_metrics.values()]
+        if len({id(metric) for metric in accumulators}) != len(accumulators):
+            self.writer.close()
+            raise ValueError("get_epoch_metric must return fresh, independent accumulators for every dataset.")
 
         self.best_validation_loss_dict = {
             name: (float("inf"), -2) for name, demo in
@@ -296,7 +307,7 @@ class TrainingBaseSession(ABC):
                     "phase", "validation_index", "dataloader_train", "validation_names"}
         if not isinstance(checkpoint, dict) or not required.issubset(checkpoint):
             raise ValueError("Incomplete or unsupported checkpoint: required training state is missing.")
-        if checkpoint["format_version"] != 2:
+        if checkpoint["format_version"] != 3:
             raise ValueError("Unsupported checkpoint format version: {}".format(checkpoint["format_version"]))
         self.network.load_state_dict(checkpoint["network"])
         if not create_run_dir_afresh:
@@ -409,7 +420,7 @@ class TrainingBaseSession(ABC):
             best_model = None
             best_model_epoch = None
         checkpoint = {
-            "format_version": 2,
+            "format_version": 3,
             "phase": self._phase,
             "validation_index": self._validation_index,
             "validation_names": list(self.datasets_valid_dict.names),
@@ -546,7 +557,8 @@ class TrainingBaseSession(ABC):
         self.optimizer.step()
         self.progress_train.increment_iter(self.infer_mini_batch_size(mini_batch))
         # `outs_dict` is supposed to have all key-value pairs required by functionals in metrics.
-        self.value_logger_train.update(self.loggable_train(**{"loss_tensor": loss}, **outs_dict))
+        self.value_logger_train.update(self.loggable_train(**{"loss_tensor": loss}, **outs_dict),
+                                       metric_inputs=outs_dict)
 
         for param in self.value_logger_train.names:
             self.writer.add_scalar("training/{}/iterations".format(param),
@@ -562,12 +574,20 @@ class TrainingBaseSession(ABC):
         loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
         self.progress_valid_dict[valid_dataset_name].increment_iter(self.infer_mini_batch_size(mini_batch))
         self.value_logger_valid_dict[valid_dataset_name].update(
-            self.loggable_valid_dict[valid_dataset_name](**{"loss_tensor": loss}, **outs_dict))
+            self.loggable_valid_dict[valid_dataset_name](**{"loss_tensor": loss}, **outs_dict), metric_inputs=outs_dict)
 
         for param in self.value_logger_valid_dict[valid_dataset_name].names:
             self.writer.add_scalar("validation-{}/{}/iterations".format(valid_dataset_name, param),
                                    self.value_logger_valid_dict[valid_dataset_name].current_values[param],
                                    self.progress_valid_dict[valid_dataset_name].iter_total)
+
+    def _write_epoch_metrics(self, logger: ValuesLogger, prefix: str, epoch: int) -> None:
+        # A sample-weighted average of batch scores is not generally a dataset metric.
+        for name, value in logger.average_of_epoch.items():
+            suffix = "epochs" if name == "loss" else "batch_means"
+            self.writer.add_scalar("{}/{}/{}".format(prefix, name, suffix), value, epoch)
+        for name, value in logger.epoch_values.items():
+            self.writer.add_scalar("{}/{}/epochs".format(prefix, name), value, epoch)
 
     def do_one_training_epoch(self) -> None:
         # TODO (#13): Progress bar à la tqdm?
@@ -575,11 +595,6 @@ class TrainingBaseSession(ABC):
             self.do_one_training_iteration(mini_batch)
             if self.progress_train.iter_current_epoch % self.config_session.checkpoint_interval == 0:
                 self._save_checkpoint()
-            for param in self.value_logger_train.names:
-                self.writer.add_scalar("training/{}/epochs".format(param),
-                                       self.value_logger_train.average_of_epoch[param],
-                                       self.progress_train.epoch + 1)
-
             self.print("training | epoch = {:0{}d}/{}\t"
                        "iter = {:0{}d}/{}\t"
                        "loss = {:.5f}".format(self.progress_train.epoch + 1,
@@ -590,6 +605,7 @@ class TrainingBaseSession(ABC):
                                               len(self.dataloader_train),
                                               self.value_logger_train.current_values["loss"]))
 
+        self._write_epoch_metrics(self.value_logger_train, "training", self.progress_train.epoch + 1)
         self.progress_train.increment_epoch()
 
     def do_one_validation_epoch(self, valid_dataset_name: str) -> None:
@@ -598,11 +614,6 @@ class TrainingBaseSession(ABC):
             if (self.progress_valid_dict[valid_dataset_name].iter_current_epoch
                     % self.config_session.checkpoint_interval == 0):
                 self._save_checkpoint()
-
-            for param in self.value_logger_valid_dict[valid_dataset_name].names:
-                self.writer.add_scalar("validation-{}/{}/epochs".format(valid_dataset_name, param),
-                                       self.value_logger_valid_dict[valid_dataset_name].average_of_epoch[param],
-                                       self.progress_valid_dict[valid_dataset_name].epoch + 1)
 
             self.print("validation-{} | epoch = {:0{}d}/{}\t"
                        "iter = {:0{}d}/{}\t"
@@ -616,6 +627,9 @@ class TrainingBaseSession(ABC):
                                               len(self.dataloader_valid_dict[valid_dataset_name]),
                                               self.value_logger_valid_dict[valid_dataset_name].current_values["loss"]))
 
+        self._write_epoch_metrics(self.value_logger_valid_dict[valid_dataset_name],
+                                  "validation-{}".format(valid_dataset_name),
+                                  self.progress_valid_dict[valid_dataset_name].epoch + 1)
         self.progress_valid_dict[valid_dataset_name].increment_epoch()
 
     def train(self):

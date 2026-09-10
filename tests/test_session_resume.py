@@ -172,10 +172,7 @@ class TrainingBaseSessionResumeUnitTest(unittest.TestCase):
             self.assertEqual(actual, expected)
 
     def assert_loggers_equal(self, actual, expected):
-        self.assertEqual(actual.names, expected.names)
-        self.assertEqual(actual.current_values, expected.current_values)
-        self.assertEqual(actual.average_of_epoch, expected.average_of_epoch)
-        self.assertEqual(actual.average_overall, expected.average_overall)
+        self.assert_nested_equal(actual.state_dict(), expected.state_dict())
 
     def assert_states_equal(self, actual, expected):
         self.assertEqual(actual.best_validation_loss_dict, expected.best_validation_loss_dict)

@@ -241,6 +241,16 @@ directory of your experiment runs will launch the web-service from where you cou
 logged parameters, judge whether you are going over- or under-fit, or decide the best set of hyperparameters across
 experiments.
 
+Iteration metrics describe each mini-batch. At epoch completion, their sample-weighted averages are logged under
+`batch_means`, not as whole-dataset scores. Binary precision, recall and F1 also have `epochs` scores computed from four accumulated
+confusion counts, independently for training and each validation dataset. Other metrics, including AUC and PSNR,
+remain batch statistics; no predictions are buffered. `loss/epochs` remains the sample-weighted mean of batch losses
+and assumes a mean-reduced loss. Update any custom TensorBoard layouts accordingly when moving from v0.1.x.
+
+For a custom whole-epoch metric, override `BaseMetricsClass.get_epoch_metric(name)` to return a fresh `EpochMetric`
+with keyword-only `update`, `compute`, `reset`, `state_dict` and `load_state_dict` methods. Its state is checkpointed
+and resets at the start of its dataset's next epoch, not when resuming inside an epoch.
+
 For various reasons, you may sometimes want to suspend the training process before it is finalized. `torchbase` provides
 you with the possibility to take over from the latest saved iteration of a past experiment, whether it was training
 or validating:

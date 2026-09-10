@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Separate sample-weighted batch metric averages (`batch_means` in TensorBoard)
+  from whole-epoch metrics (`epochs`). Keep iteration values and `loss/epochs`
+  unchanged; loss aggregation assumes mean-reduced batch losses. Custom layouts
+  using the old metric `epochs` tags need updating.
+- Write aggregate summaries once at epoch completion, including when recovering
+  a checkpoint saved after the last batch but before its summary was written.
+- Compute exact binary micro/macro precision, recall and F1 from bounded confusion
+  counts. Keep AUC, reconstruction, segmentation and other stateless metrics as
+  explicitly labeled batch statistics, without retaining predictions.
+- Add the optional `EpochMetric` interface for custom accumulators, with independent
+  state and reset behavior for training and each validation dataset. Preserve this
+  state during mid-epoch recovery. `ValuesLogger.epoch_values` holds exact scores;
+  `average_of_epoch` and `average_overall` remain averages of batch scores.
+- Advance checkpoints to format 3; earlier unreleased format-2 checkpoints must
+  use their original code to resume. Test uneven batches against whole-dataset
+  references, dataset isolation, resets and interrupted checkpoint saves.
 - Preserve unmapped metric arguments and defaults when applying partial keyword
   mappings. Handle each metric's signature separately and reject conflicting
   mappings or duplicate inputs. Test both training and validation invocation.

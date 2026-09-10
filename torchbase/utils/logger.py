@@ -4,6 +4,9 @@ from typing import List, Dict, Any, Callable
 
 import inspect
 import json
+from copy import deepcopy
+
+from torchbase.utils.metrics import EpochMetric
 
 
 @dataclass
@@ -61,7 +64,10 @@ class ProgressManager:
 
 
 class ValuesLogger:
-    def __init__(self, names: List[str], progress_manager: ProgressManager) -> None:
+    """Batch-score averages and, separately, optional whole-epoch accumulators."""
+
+    def __init__(self, names: List[str], progress_manager: ProgressManager,
+                 epoch_metrics: Dict[str, EpochMetric] | None = None) -> None:
         if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
             raise TypeError("Provide `names` as a list of strings to specify all the values you want to log.")
         self.names = names
@@ -69,17 +75,26 @@ class ValuesLogger:
         if not isinstance(progress_manager, ProgressManager):
             raise TypeError("Pass a `progress_manager` from `ProgressManager` class.")
         self.progress_manager = progress_manager
+        self.epoch_metrics = dict(epoch_metrics) if epoch_metrics is not None else {}
+        if any(name not in names or not isinstance(metric, EpochMetric) for name, metric in self.epoch_metrics.items()):
+            raise ValueError("Epoch metrics must be EpochMetric instances with names present in the logger.")
 
         self.current_values: Dict[str, float] = {name: 0.0 for name in names}
         self.average_of_epoch: Dict[str, float] = {name: 0.0 for name in names}
         self.average_overall: Dict[str, float] = {name: 0.0 for name in names}
 
-    def update(self, values_dict: Dict[str, float]) -> None:
+    def update(self, values_dict: Dict[str, float], *, metric_inputs: Dict | None = None) -> None:
         if not isinstance(values_dict, dict) or any(
                 [not isinstance(name, str) or not isinstance(value, float) for name, value in values_dict.items()]):
             raise TypeError("The passed `values_dict` must be a dictionary of string-float pairs.")
         if set(values_dict.keys()) != set(self.names):
             raise ValueError("The passed `values_dict` does not have the same keys as the declared `self.names`.")
+
+        for metric in self.epoch_metrics.values():
+            if metric_inputs is None:
+                raise ValueError("Epoch metrics require metric_inputs when updating the logger.")
+            signature = inspect.signature(metric.update)
+            metric.update(**{key: value for key, value in metric_inputs.items() if key in signature.parameters})
 
         self.current_values = values_dict
         current_samples = self.progress_manager.samples_current_iter
@@ -98,10 +113,19 @@ class ValuesLogger:
     def reset_epoch(self) -> None:
         self.current_values = {name: 0.0 for name in self.names}
         self.average_of_epoch = {name: 0.0 for name in self.names}
+        for metric in self.epoch_metrics.values():
+            metric.reset()
+
+    @property
+    def epoch_values(self) -> Dict[str, float]:
+        """Whole-epoch results only; average_of_epoch remains an average of batch scores."""
+        values = {name: metric.compute() for name, metric in self.epoch_metrics.items()}
+        if any(not isinstance(value, float) for value in values.values()):
+            raise TypeError("EpochMetric.compute must return a float.")
+        return values
 
     def reset(self) -> None:
-        self.current_values = {name: 0.0 for name in self.names}
-        self.average_of_epoch = {name: 0.0 for name in self.names}
+        self.reset_epoch()
         self.average_overall = {name: 0.0 for name in self.names}
         self.progress_manager.reset()
 
@@ -114,7 +138,10 @@ class ValuesLogger:
             "names": self.names,
             "current_values": self.current_values,
             "average_of_epoch": self.average_of_epoch,
-            "average_overall": self.average_overall
+            "average_overall": self.average_overall,
+            "epoch_metrics": {name: {"type": type(metric).__module__ + "." + type(metric).__qualname__,
+                                      "state": deepcopy(metric.state_dict())}
+                              for name, metric in self.epoch_metrics.items()},
         }
 
     def set_state_values_from_disk(self, path: str) -> None:
@@ -125,6 +152,13 @@ class ValuesLogger:
     def load_state_dict(self, dict_data: Dict) -> None:
         if dict_data["names"] != self.names:
             raise RuntimeError("Inconsistent states dict loaded from disk, since `names` do not match.")
+        states = dict_data.get("epoch_metrics")
+        if not isinstance(states, dict) or set(states) != set(self.epoch_metrics):
+            raise RuntimeError("Checkpoint epoch metrics do not match the current logger.")
+        for name, metric in self.epoch_metrics.items():
+            if states[name]["type"] != type(metric).__module__ + "." + type(metric).__qualname__:
+                raise RuntimeError("Checkpoint epoch metric types do not match the current logger.")
+            metric.load_state_dict(deepcopy(states[name]["state"]))
 
         self.current_values = dict_data["current_values"]
         self.average_of_epoch = dict_data["average_of_epoch"]
