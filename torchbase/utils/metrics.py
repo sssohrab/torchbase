@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Callable
 from functools import wraps
 import inspect
+import keyword
 
 
 def _map_metric(func: Callable, keyword_maps: Dict[str, str]) -> Callable:
@@ -13,6 +14,11 @@ def _map_metric(func: Callable, keyword_maps: Dict[str, str]) -> Callable:
     mapping = {source: target for source, target in keyword_maps.items() if target in explicit or extra_params}
     if not mapping:
         return func
+    invalid_source = next((source for source in mapping if not source.isidentifier() or keyword.iskeyword(source)),
+                          None)
+    if invalid_source is not None:
+        raise ValueError("keyword_maps conflict with metric `{}`: {!r} is not a valid parameter name".format(
+            func.__name__, invalid_source))
     reverse_mapping = {target: source for source, target in mapping.items()}
     try:
         parameters = [param.replace(name=reverse_mapping.get(name, name)) for name, param in explicit.items()]
