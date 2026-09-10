@@ -44,14 +44,20 @@ class ProgressManager:
 
     def serialize_to_disk(self, path: str) -> None:
         with open(path, "w") as file:
-            json.dump(asdict(self), file, indent=2)
+            json.dump(self.state_dict(), file, indent=2)
+
+    def state_dict(self) -> Dict:
+        return asdict(self)
+
+    def load_state_dict(self, dict_data: Dict) -> None:
+        for field in fields(self):
+            setattr(self, field.name, dict_data[field.name])
 
     def set_fields_from_disk(self, path: str) -> None:
         with open(path, 'r') as file:
             dict_data = json.load(file)
 
-        for field in fields(self):
-            setattr(self, field.name, dict_data[field.name])
+        self.load_state_dict(dict_data)
 
 
 class ValuesLogger:
@@ -101,16 +107,22 @@ class ValuesLogger:
 
     def serialize_to_disk(self, path: str) -> None:
         with open(path, "w") as file:
-            json.dump({
-                "names": self.names,
-                "current_values": self.current_values,
-                "average_of_epoch": self.average_of_epoch,
-                "average_overall": self.average_overall
-            }, file, indent=2)
+            json.dump(self.state_dict(), file, indent=2)
+
+    def state_dict(self) -> Dict:
+        return {
+            "names": self.names,
+            "current_values": self.current_values,
+            "average_of_epoch": self.average_of_epoch,
+            "average_overall": self.average_overall
+        }
 
     def set_state_values_from_disk(self, path: str) -> None:
         with open(path, 'r') as file:
             dict_data = json.load(file)
+        self.load_state_dict(dict_data)
+
+    def load_state_dict(self, dict_data: Dict) -> None:
         if dict_data["names"] != self.names:
             raise RuntimeError("Inconsistent states dict loaded from disk, since `names` do not match.")
 

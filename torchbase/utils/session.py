@@ -79,6 +79,7 @@ class TrainingConfigSessionDict:
     learning_rate: float
     weight_decay: float = 0.0
     dataloader_num_workers: int = 0
+    checkpoint_interval: int = 100
     loss_function_params: None | dict = None
 
     def __init__(self, config: dict):
@@ -119,6 +120,8 @@ class TrainingConfigSessionDict:
             return False
         if self.dataloader_num_workers < 0:
             return False
+        if type(self.checkpoint_interval) is not int or self.checkpoint_interval <= 0:
+            return False
         if self.loss_function_params is not None:
             if not isinstance(self.loss_function_params, dict):
                 return False
@@ -134,8 +137,8 @@ class RandomnessGeneratorStates:
     numpy_state: tuple = field(default_factory=lambda: np.random.get_state())
     random_state: tuple = field(default_factory=lambda: random.getstate())
 
-    def save(self, filename: str):
-        data = {
+    def to_dict(self):
+        return {
             "torch_state": self.torch_state.hex(),
             "cuda_state": self.cuda_state.hex() if self.cuda_state else "",
             "numpy_state": (
@@ -145,18 +148,22 @@ class RandomnessGeneratorStates:
             ),
             "random_state": (self.random_state[0], list(self.random_state[1]), self.random_state[2])
         }
+
+    def save(self, filename: str):
         with open(filename, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
     def load(cls, filename: str):
         with open(filename, "r") as f:
             data = json.load(f)
+        return cls.from_dict(data)
 
+    @classmethod
+    def from_dict(cls, data):
         rng_state = cls()
         rng_state.torch_state = bytes.fromhex(data["torch_state"])
-        if data["cuda_state"]:
-            rng_state.cuda_state = bytes.fromhex(data["cuda_state"])
+        rng_state.cuda_state = bytes.fromhex(data["cuda_state"])
 
         numpy_state = (
             data["numpy_state"][0],

@@ -3,13 +3,13 @@ from torchbase.utils.session import generate_log_dir_tag, is_custom_scalar_loggi
 from torchbase.utils.session import RandomnessGeneratorStates
 from torchbase.utils.data import ValidationDatasetsDict
 from torchbase.utils.metrics import BaseMetricsClass
-from torchbase.utils.networks import load_network_from_state_dict_to_device
 from torchbase.utils.logger import ProgressManager, ValuesLogger, LoggableParams
+from torchbase.utils.checkpoint import atomic_torch_save
 
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import DataLoader
+from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.utils.data import Dataset as TorchDataset
 
 from datasets import Dataset
@@ -21,13 +21,10 @@ import os
 import random
 import json
 import shutil
-import warnings
 
 SAVED_NETWORK_NAME = "network.pth"
-SAVED_OPTIMIZER_NAME = "optimizer.pth"
 SAVED_RNG_NAME = "rng_states.json"
-SAVED_CONTINUATION_RNG_NAME = "rng_states_continuation.json"
-ITERATION_STEPS_TO_SAVE_STATES = 10
+SAVED_CHECKPOINT_NAME = "checkpoint.pth"
 DO_LOG_HPARAMS = True
 
 
@@ -51,11 +48,18 @@ class TrainingBaseSession(ABC):
 
         self.dataset_train, self.datasets_valid_dict = self._init_datasets()
         self.dataloader_train, self.dataloader_valid_dict = self.init_dataloaders()
+        for loader in [self.dataloader_train, *self.dataloader_valid_dict.values()]:
+            self._dataloader_settings(loader)
 
         self.network = self._init_network()
 
         self.optimizer = self.init_optimizer()
 
+        self._loaded_checkpoint = None
+        self.best_model_epoch = None
+        self._phase = "training"
+        self._validation_index = 0
+        self._pending_loader_rng = {}
         self.load_network_and_optimizer_states_if_relevant(source_run_dir_tag, create_run_dir_afresh)
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
@@ -78,7 +82,9 @@ class TrainingBaseSession(ABC):
                                              progress_manager=self.progress_valid_dict[valid_dataset_name]) for
             valid_dataset_name in self.datasets_valid_dict.names}
 
-        self.best_validation_loss_dict = self.init_or_load_best_validation_loss_dict(create_run_dir_afresh)
+        self.best_validation_loss_dict = {
+            name: (float("inf"), -2) for name, demo in
+            zip(self.datasets_valid_dict.names, self.datasets_valid_dict.only_for_demo) if not demo}
 
         self.hparams_dict = self.init_hparams_dict()
 
@@ -90,6 +96,7 @@ class TrainingBaseSession(ABC):
             except Exception:
                 self.writer.close()
                 raise
+        self._loaded_checkpoint = None
 
     @staticmethod
     def print(report: str, end: str | None = None) -> None:
@@ -165,13 +172,9 @@ class TrainingBaseSession(ABC):
             raise FileNotFoundError("The randomness states file does not exist under the source `{}`. "
                                     "This is not a valid source".format(source_states_dir))
 
-        if not os.path.exists(os.path.join(source_states_dir, SAVED_NETWORK_NAME)):
-            raise FileNotFoundError("The saved network's `states_dict` does not exist under the source `{}`. "
-                                    "This is not a valid source".format(source_states_dir))
-
-        if not os.path.exists(os.path.join(source_states_dir, SAVED_OPTIMIZER_NAME)):
-            raise FileNotFoundError("The optimizer `states_dict` file does not exist in the source `{}`. "
-                                    "This is not a valid source".format(source_states_dir))
+        if not os.path.exists(os.path.join(source_states_dir, SAVED_CHECKPOINT_NAME)):
+            raise FileNotFoundError("No checkpoint.pth found. Resuming v0.1.x separate-file checkpoints is not "
+                                    "supported in v0.2.x; continue with the old version or start a new experiment.")
 
     def add_writer_custom_scalar_logging_layout(self, layout_dict: Dict):
         if is_custom_scalar_logging_layout_valid(layout_dict,
@@ -180,20 +183,6 @@ class TrainingBaseSession(ABC):
             self.writer.add_custom_scalars(layout_dict)
         else:
             raise TypeError("The provided `layout_dict` is not valid. Debug to see where exactly it fails.")
-
-    def init_or_load_best_validation_loss_dict(self, create_run_dir_afresh: bool) -> Dict[str, Tuple[float, int]]:
-        if create_run_dir_afresh:
-            best_validation_loss_dict = {
-                self.datasets_valid_dict.names[ind]: (float("inf"), -2) for
-                ind in range(len(self.datasets_valid_dict.names)) if not self.datasets_valid_dict.only_for_demo[ind]}
-
-            return best_validation_loss_dict
-        else:
-            states_dir_path = os.path.join(self.run_dir, "states")
-            with open(os.path.join(states_dir_path, "best_validation_loss_dict.json"), "r") as f:
-                best_validation_loss_dict = json.load(f)
-
-            return best_validation_loss_dict
 
     @staticmethod
     def configure_states_dir_and_randomness_sources(run_dir: str, create_run_dir_afresh: bool) -> None:
@@ -241,25 +230,20 @@ class TrainingBaseSession(ABC):
 
         return dataset_train, datasets_valid_dict
 
-    def init_dataloaders(self) -> Tuple[DataLoader, Dict[str, DataLoader]]:
-        # TODO (#13): `datasets.Dataset.shuffle()` or `torch.utils.data.DataLoader` ?
-        # TODO (#13): How about `torchdata.StatefulDataLoader` for full reproducibility of checkpoints?
+    def init_dataloaders(self) -> Tuple[StatefulDataLoader, Dict[str, StatefulDataLoader]]:
         # TODO (#10): When streaming mode gets support, dataloading and shuffling will get nuanced.
-
-        dataloader_train = DataLoader(self.dataset_train, batch_size=self.config_session.mini_batch_size, shuffle=True,
+        def make_loader(dataset):
+            generator = torch.Generator().manual_seed(torch.empty((), dtype=torch.int64).random_().item())
+            return StatefulDataLoader(dataset, batch_size=self.config_session.mini_batch_size, shuffle=True,
                                       num_workers=self.config_session.dataloader_num_workers,
-                                      collate_fn=self.dataloader_collate_function)
-        dataloader_valid_dict = {
-            self.datasets_valid_dict.names[ind]: DataLoader(self.datasets_valid_dict.datasets[ind],
-                                                            batch_size=self.config_session.mini_batch_size,
-                                                            shuffle=True,
-                                                            num_workers=self.config_session.dataloader_num_workers,
-                                                            collate_fn=self.dataloader_collate_function) for ind in
-            range(len(self.datasets_valid_dict.names))}
+                                      collate_fn=self.dataloader_collate_function, generator=generator)
 
-        return dataloader_train, dataloader_valid_dict
+        return make_loader(self.dataset_train), {
+            name: make_loader(dataset) for name, dataset in
+            zip(self.datasets_valid_dict.names, self.datasets_valid_dict.datasets)}
 
-    def dataloader_collate_function(self, batch: List[Any]) -> Dict[str, List[Any] | torch.Tensor]:
+    @staticmethod
+    def dataloader_collate_function(batch: List[Any]) -> Dict[str, List[Any] | torch.Tensor]:
         return torch.utils.data.default_collate(batch)
 
     @abstractmethod
@@ -291,10 +275,6 @@ class TrainingBaseSession(ABC):
 
         return optimizer
 
-    def save_network_and_optimizer_states(self) -> None:
-        torch.save(self.network.state_dict(), os.path.join(self.run_dir, "states", SAVED_NETWORK_NAME))
-        torch.save(self.optimizer.state_dict(), os.path.join(self.run_dir, "states", SAVED_OPTIMIZER_NAME))
-
     def load_network_and_optimizer_states_if_relevant(self, source_run_dir_tag: None | str,
                                                       create_run_dir_afresh: bool) -> None:
         if source_run_dir_tag is None:
@@ -303,46 +283,149 @@ class TrainingBaseSession(ABC):
             return
 
         source_states_dir_path = os.path.join(os.path.dirname(self.run_dir), source_run_dir_tag, "states")
-        self.network = load_network_from_state_dict_to_device(
-            self.network,
-            state_dict_path=os.path.join(source_states_dir_path, SAVED_NETWORK_NAME),
-            device=self.device)
-
-        if create_run_dir_afresh:
-            return
-        # A new run reuses weights only; an existing run also restores its optimizer.
-        self.optimizer.load_state_dict(
-            torch.load(os.path.join(source_states_dir_path, SAVED_OPTIMIZER_NAME),
-                       map_location=self.device, weights_only=True))
+        checkpoint_path = os.path.join(source_states_dir_path, SAVED_CHECKPOINT_NAME)
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        required = {"format_version", "network", "optimizer", "progress_train", "values_logger_train",
+                    "validation", "best_validation_loss_dict", "best_model", "best_model_epoch", "rng_state",
+                    "phase", "validation_index", "dataloader_train", "validation_names"}
+        if not isinstance(checkpoint, dict) or not required.issubset(checkpoint):
+            raise ValueError("Incomplete or unsupported checkpoint: required training state is missing.")
+        if checkpoint["format_version"] != 2:
+            raise ValueError("Unsupported checkpoint format version: {}".format(checkpoint["format_version"]))
+        self.network.load_state_dict(checkpoint["network"])
+        if not create_run_dir_afresh:
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+            self._loaded_checkpoint = checkpoint
 
     def _restore_training_state(self) -> None:
-        """Restore completed-epoch progress, logs, and continuation RNG after initialization."""
-        states_dir = os.path.join(self.run_dir, "states")
-        self.progress_train.set_fields_from_disk(os.path.join(states_dir, "progress_manager_train.json"))
-        self.value_logger_train.set_state_values_from_disk(os.path.join(states_dir, "values_logger_train.json"))
-        for name in self.datasets_valid_dict.names:
-            self.progress_valid_dict[name].set_fields_from_disk(
-                os.path.join(states_dir, "progress_manager_valid_{}.json".format(name)))
-            self.value_logger_valid_dict[name].set_state_values_from_disk(
-                os.path.join(states_dir, "values_logger_valid_{}.json".format(name)))
+        """Restore one completed iteration, including the active loop and loader positions."""
+        checkpoint = self._loaded_checkpoint
+        if (checkpoint["validation_names"] != list(self.datasets_valid_dict.names)
+                or set(checkpoint["validation"]) != set(self.datasets_valid_dict.names)):
+            raise ValueError("Checkpoint validation datasets do not match the current session.")
+        if set(checkpoint["best_validation_loss_dict"]) != set(self.best_validation_loss_dict):
+            raise ValueError("Checkpoint model-selection datasets do not match the current session.")
+        self.best_validation_loss_dict = checkpoint["best_validation_loss_dict"]
+        self.progress_train.load_state_dict(checkpoint["progress_train"])
+        self.value_logger_train.load_state_dict(checkpoint["values_logger_train"])
+        self._restore_dataloader(self.dataloader_train, checkpoint["dataloader_train"], self.progress_train)
+        for name, state in checkpoint["validation"].items():
+            self.progress_valid_dict[name].load_state_dict(state["progress"])
+            self.value_logger_valid_dict[name].load_state_dict(state["values_logger"])
+            self._restore_dataloader(self.dataloader_valid_dict[name], state["dataloader"],
+                                     self.progress_valid_dict[name])
+        self._phase = checkpoint["phase"]
+        self._validation_index = checkpoint["validation_index"]
+        self._check_loop_state()
+        self.best_model_epoch = checkpoint["best_model_epoch"]
+        if checkpoint["best_model"] is not None:
+            atomic_torch_save(checkpoint["best_model"], os.path.join(self.run_dir, SAVED_NETWORK_NAME))
+        RandomnessGeneratorStates.from_dict(checkpoint["rng_state"]).apply()
 
-        # A shuffled dataloader cannot recover a partial epoch from counters alone.
-        progress_managers = [self.progress_train, *self.progress_valid_dict.values()]
-        if any(progress.iter_current_epoch != 0 or progress.samples_current_epoch != 0
-               or progress.epoch != self.progress_train.epoch for progress in progress_managers):
-            raise ValueError(
-                "Resume requires a completed training-and-validation epoch. This checkpoint is partial or "
-                "has inconsistent epoch counters; dataloader positions are not saved. Use an intact "
-                "completed-epoch checkpoint, or start a new run with these weights.")
+    @staticmethod
+    def _dataloader_settings(loader) -> Dict:
+        if not isinstance(loader, StatefulDataLoader) or loader.generator is None or not loader.in_order:
+            raise ValueError("Recovery requires StatefulDataLoader with an explicit generator and in_order=True.")
+        if loader.persistent_workers:
+            raise ValueError("Recovery currently requires persistent_workers=False.")
+        return {"dataset_size": len(loader.dataset), "batch_size": loader.batch_size,
+                "num_workers": loader.num_workers, "drop_last": loader.drop_last,
+                "persistent_workers": loader.persistent_workers, "prefetch_factor": loader.prefetch_factor}
 
-        continuation_rng_path = os.path.join(states_dir, SAVED_CONTINUATION_RNG_NAME)
-        if os.path.exists(continuation_rng_path):
-            RandomnessGeneratorStates.load(continuation_rng_path).apply()
+    def _dataloader_state(self, loader, progress) -> Dict:
+        return {"settings": self._dataloader_settings(loader),
+                # Do not create iterators (or start workers) for inactive loaders.
+                "iterator": loader.state_dict() if progress.iter_current_epoch else None,
+                "generator": loader.generator.get_state()}
+
+    def _restore_dataloader(self, loader, state, progress) -> None:
+        if state["settings"] != self._dataloader_settings(loader):
+            raise ValueError("Checkpoint dataloader settings do not match the current session.")
+        if (state["iterator"] is None) != (progress.iter_current_epoch == 0):
+            raise ValueError("Checkpoint dataloader position is inconsistent with its progress.")
+        loader.generator.set_state(state["generator"])
+        if state["iterator"] is not None:
+            loader.load_state_dict(state["iterator"])
+            self._pending_loader_rng[id(loader)] = state["generator"]
+
+    def _dataloader_iterator(self, loader):
+        generator_state = self._pending_loader_rng.pop(id(loader), None)
+        if generator_state is None:
+            return iter(loader)
+        # StatefulDataLoader restores lazily in iter(). Reconstructing its
+        # sampler and worker seed consumes RNG; that setup is not a training step.
+        rng = RandomnessGeneratorStates()
+        iterator = iter(loader)
+        loader.generator.set_state(generator_state)
+        rng.apply()
+        return iterator
+
+    def _check_loop_state(self) -> None:
+        count = len(self.datasets_valid_dict.names)
+        index = self._validation_index
+        if (self._phase not in ("training", "validation", "selection") or type(index) is not int
+                or not 0 <= index <= count
+                or (self._phase == "training" and index != 0)
+                or (self._phase == "selection" and index != count)):
+            raise ValueError("Inconsistent checkpoint execution phase.")
+        epoch = self.progress_train.epoch
+        if any(type(value) is not int or value < 0 for progress in
+               [self.progress_train, *self.progress_valid_dict.values()] for value in progress.state_dict().values()):
+            raise ValueError("Invalid checkpoint progress counters.")
+        if self._phase != "training" and (epoch == 0 or self.progress_train.iter_current_epoch != 0
+                                          or self.progress_train.samples_current_epoch != 0):
+            raise ValueError("Inconsistent checkpoint training progress.")
+        for ind, name in enumerate(self.datasets_valid_dict.names):
+            progress = self.progress_valid_dict[name]
+            expected_epoch = epoch - int(self._phase == "validation" and ind >= index)
+            active = self._phase == "validation" and ind == index
+            if progress.epoch != expected_epoch or (not active and
+                    (progress.iter_current_epoch != 0 or progress.samples_current_epoch != 0)):
+                raise ValueError("Inconsistent checkpoint validation progress.")
+
+    def _save_checkpoint(self, *, is_best: bool = False) -> None:
+        """Commit one recovery point, including the selected inference model."""
+        self._check_loop_state()
+        best_path = os.path.join(self.run_dir, SAVED_NETWORK_NAME)
+        checkpoint_path = os.path.join(self.run_dir, "states", SAVED_CHECKPOINT_NAME)
+        network_state = self.network.state_dict()
+        if is_best:
+            best_model = network_state
+            best_model_epoch = self.progress_train.epoch - 1
+        elif os.path.exists(checkpoint_path):
+            # The export is only a convenience copy: it may have been removed
+            # or its write interrupted. Carry forward the authoritative best.
+            previous = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            best_model = previous["best_model"]
+            best_model_epoch = previous["best_model_epoch"]
+            del previous
         else:
-            warnings.warn(
-                "Checkpoint has no continuation RNG state (as in torchbase <=0.1.4). "
-                "Saved training state was restored, but the original random sequence cannot be recovered.",
-                RuntimeWarning, stacklevel=2)
+            best_model = None
+            best_model_epoch = None
+        checkpoint = {
+            "format_version": 2,
+            "phase": self._phase,
+            "validation_index": self._validation_index,
+            "validation_names": list(self.datasets_valid_dict.names),
+            "network": network_state,
+            "optimizer": self.optimizer.state_dict(),
+            "progress_train": self.progress_train.state_dict(),
+            "values_logger_train": self.value_logger_train.state_dict(),
+            "dataloader_train": self._dataloader_state(self.dataloader_train, self.progress_train),
+            "validation": {name: {"progress": self.progress_valid_dict[name].state_dict(),
+                                  "values_logger": self.value_logger_valid_dict[name].state_dict(),
+                                  "dataloader": self._dataloader_state(self.dataloader_valid_dict[name],
+                                                                        self.progress_valid_dict[name])}
+                           for name in self.datasets_valid_dict.names},
+            "best_validation_loss_dict": self.best_validation_loss_dict,
+            "best_model": best_model,
+            "best_model_epoch": best_model_epoch,
+            "rng_state": RandomnessGeneratorStates().to_dict(),
+        }
+        atomic_torch_save(checkpoint, checkpoint_path)
+        self.best_model_epoch = best_model_epoch
+        if is_best:
+            atomic_torch_save(best_model, best_path)
 
     @abstractmethod
     def init_metrics(self) -> List[BaseMetricsClass] | None:
@@ -403,28 +486,6 @@ class TrainingBaseSession(ABC):
         hparams_event_dir = os.path.join(self.run_dir, "hparams")
         if os.path.exists(hparams_event_dir):
             shutil.rmtree(hparams_event_dir)
-
-    def save_training_states(self) -> None:
-        states_dir_path = os.path.join(self.run_dir, "states")
-        torch.save(self.network.state_dict(), os.path.join(states_dir_path, SAVED_NETWORK_NAME))
-        torch.save(self.optimizer.state_dict(), os.path.join(states_dir_path, SAVED_OPTIMIZER_NAME))
-
-        # TODO: learning rate scheduler state_dicts
-        # TODO (#13): Dataloader states dict (maybe from torchdata.StatefulDataLoader)
-
-        self.progress_train.serialize_to_disk(os.path.join(states_dir_path, "progress_manager_train.json"))
-        self.value_logger_train.serialize_to_disk(os.path.join(states_dir_path, "values_logger_train.json"))
-        RandomnessGeneratorStates().save(os.path.join(states_dir_path, SAVED_CONTINUATION_RNG_NAME))
-
-    def save_progress_and_log_states_for_valid_set(self, valid_dataset_name: str):
-        states_dir_path = os.path.join(self.run_dir, "states")
-        self.progress_valid_dict[valid_dataset_name].serialize_to_disk(
-            os.path.join(states_dir_path, "progress_manager_valid_{}.json".format(valid_dataset_name)))
-        self.value_logger_valid_dict[valid_dataset_name].serialize_to_disk(
-            os.path.join(states_dir_path, "values_logger_valid_{}.json".format(valid_dataset_name)))
-
-        with open(os.path.join(states_dir_path, "best_validation_loss_dict.json"), "w") as f:
-            json.dump(self.best_validation_loss_dict, f, indent=2)
 
     @abstractmethod
     def forward_pass(self, mini_batch: Dict[str, Any | torch.Tensor]) -> Dict[str, Any | torch.Tensor]:
@@ -503,12 +564,11 @@ class TrainingBaseSession(ABC):
                                    self.progress_valid_dict[valid_dataset_name].iter_total)
 
     def do_one_training_epoch(self) -> None:
-        start_iter_index = self.progress_train.iter_current_epoch
         # TODO (#13): Progress bar à la tqdm?
-        for (ind, mini_batch) in enumerate(self.dataloader_train):
+        for (ind, mini_batch) in enumerate(self._dataloader_iterator(self.dataloader_train)):
             self.do_one_training_iteration(mini_batch)
-            if self.progress_train.iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
-                self.save_training_states()
+            if self.progress_train.iter_current_epoch % self.config_session.checkpoint_interval == 0:
+                self._save_checkpoint()
             for param in self.value_logger_train.names:
                 self.writer.add_scalar("training/{}/epochs".format(param),
                                        self.value_logger_train.average_of_epoch[param],
@@ -521,17 +581,17 @@ class TrainingBaseSession(ABC):
                                               self.config_session.num_epochs,
                                               self.progress_train.iter_current_epoch,
                                               int(np.ceil(np.log10(len(self.dataloader_train)))),
-                                              len(self.dataloader_train) + start_iter_index,
+                                              len(self.dataloader_train),
                                               self.value_logger_train.current_values["loss"]))
 
         self.progress_train.increment_epoch()
 
     def do_one_validation_epoch(self, valid_dataset_name: str) -> None:
-        start_iter_index = self.progress_valid_dict[valid_dataset_name].iter_current_epoch
-        for (ind, mini_batch) in enumerate(self.dataloader_valid_dict[valid_dataset_name]):
+        for (ind, mini_batch) in enumerate(self._dataloader_iterator(self.dataloader_valid_dict[valid_dataset_name])):
             self.do_one_validation_iteration(mini_batch, valid_dataset_name)
-            if self.progress_valid_dict[valid_dataset_name].iter_total % ITERATION_STEPS_TO_SAVE_STATES == 0:
-                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
+            if (self.progress_valid_dict[valid_dataset_name].iter_current_epoch
+                    % self.config_session.checkpoint_interval == 0):
+                self._save_checkpoint()
 
             for param in self.value_logger_valid_dict[valid_dataset_name].names:
                 self.writer.add_scalar("validation-{}/{}/epochs".format(valid_dataset_name, param),
@@ -547,33 +607,46 @@ class TrainingBaseSession(ABC):
                                               self.progress_valid_dict[valid_dataset_name].iter_current_epoch,
                                               int(np.ceil(
                                                   np.log10(len(self.dataloader_valid_dict[valid_dataset_name])))),
-                                              len(self.dataloader_valid_dict[valid_dataset_name]) + start_iter_index,
+                                              len(self.dataloader_valid_dict[valid_dataset_name]),
                                               self.value_logger_valid_dict[valid_dataset_name].current_values["loss"]))
 
         self.progress_valid_dict[valid_dataset_name].increment_epoch()
 
     def train(self):
-        start_epoch_index = self.progress_train.epoch
-        model_saved_at_iteration: int | None = None
+        # Preserve the initialized state too, so an interrupted first epoch can restart.
+        if not os.path.exists(os.path.join(self.run_dir, "states", SAVED_CHECKPOINT_NAME)):
+            self._save_checkpoint()
 
-        for i_epoch in range(start_epoch_index, self.config_session.num_epochs):
-            self.value_logger_train.reset_epoch()
-            self.do_one_training_epoch()
-            self.save_training_states()
-            self.print("\t === averaged over this epoch = {:.5f} === ".format(
-                self.value_logger_train.average_of_epoch["loss"]))
+        while self.progress_train.epoch < self.config_session.num_epochs or self._phase != "training":
+            if self._phase == "training":
+                if self.progress_train.iter_current_epoch == 0:
+                    self.value_logger_train.reset_epoch()
+                self.do_one_training_epoch()
+                self.print("\t === averaged over this epoch = {:.5f} === ".format(
+                    self.value_logger_train.average_of_epoch["loss"]))
+                self._phase = "validation"
+                self._save_checkpoint()
 
-            vote_for_epoch_as_successful: List[bool] = []
-            for ind_set in range(len(self.datasets_valid_dict.names)):
+            while self._validation_index < len(self.datasets_valid_dict.names):
                 self.print("\n")
-                valid_dataset_name = self.datasets_valid_dict.names[ind_set]
+                valid_dataset_name = self.datasets_valid_dict.names[self._validation_index]
 
-                self.value_logger_valid_dict[valid_dataset_name].reset_epoch()
+                if self.progress_valid_dict[valid_dataset_name].iter_current_epoch == 0:
+                    self.value_logger_valid_dict[valid_dataset_name].reset_epoch()
                 self.do_one_validation_epoch(valid_dataset_name)
-                self.save_progress_and_log_states_for_valid_set(valid_dataset_name)
                 self.print("\t === averaged over this epoch = {:.5f} === ".format(
                     self.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"]))
+                self._validation_index += 1
+                if self._validation_index == len(self.datasets_valid_dict.names):
+                    self._phase = "selection"
+                self._save_checkpoint()
 
+            # Individual best records must not change until every validation set
+            # has finished, so interrupted validation cannot change the votes.
+            self._phase = "selection"
+            i_epoch = self.progress_train.epoch - 1
+            vote_for_epoch_as_successful: List[bool] = []
+            for ind_set, valid_dataset_name in enumerate(self.datasets_valid_dict.names):
                 if not self.datasets_valid_dict.only_for_demo[ind_set]:
                     best_validation_loss, best_previous_epoch = self.best_validation_loss_dict[valid_dataset_name]
                     current_epoch_valid_loss = self.value_logger_valid_dict[valid_dataset_name].average_of_epoch["loss"]
@@ -591,11 +664,12 @@ class TrainingBaseSession(ABC):
                         self.print("Voting AGAINST this model.")
                         vote_for_epoch_as_successful.append(False)
 
-            if all(vote_for_epoch_as_successful):
-                torch.save(self.network.state_dict(), os.path.join(self.writer.log_dir, SAVED_NETWORK_NAME))
+            is_best = all(vote_for_epoch_as_successful)
+            self._phase = "training"
+            self._validation_index = 0
+            self._save_checkpoint(is_best=is_best)
 
-                model_saved_at_iteration = i_epoch
-
+            if is_best:
                 if DO_LOG_HPARAMS:
                     self.cleanup_previous_hparam_events_if_any()
                     self.writer.add_hparams(hparam_dict=self.hparams_dict,
@@ -606,13 +680,9 @@ class TrainingBaseSession(ABC):
                     i_epoch + 1, self.config_session.num_epochs))
             self.print("\n")
 
-            # Validation may consume randomness too. Keep the initialization RNG
-            # untouched and capture the state used to start the next epoch.
-            RandomnessGeneratorStates().save(os.path.join(self.run_dir, "states", SAVED_CONTINUATION_RNG_NAME))
-
         self.print("\nThis is the end of training and validation.")
-        if model_saved_at_iteration is not None:
-            self.print("The best model was saved at iteration {}/{}.".format(model_saved_at_iteration + 1,
+        if self.best_model_epoch is not None:
+            self.print("The best model was saved at epoch {}/{}.".format(self.best_model_epoch + 1,
                                                                              self.config_session.num_epochs))
             # TODO: JIT-compilation of the final saved model.2
 
@@ -621,9 +691,5 @@ class TrainingBaseSession(ABC):
     def __call__(self):
         try:
             self.train()
-        except BaseException as e:
-            if not os.path.exists(os.path.join(self.run_dir, "states", SAVED_NETWORK_NAME)):
-                shutil.rmtree(self.run_dir)
-                self.print("Removed this run's log-dir altogether, since encountered the exception {}, "
-                           "before any useful state could be saved.".format(type(e).__name__))
-            raise e
+        finally:
+            self.writer.close()

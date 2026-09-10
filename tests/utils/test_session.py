@@ -66,6 +66,14 @@ class CustomScalarLoggingLayoutValidityUnitTest(unittest.TestCase):
 
 class TrainingConfigSessionDictUnitTest(unittest.TestCase):
 
+    def test_checkpoint_interval_validation_and_round_trip(self):
+        base = {"device_name": "cpu", "num_epochs": 1, "mini_batch_size": 3, "learning_rate": 0.01}
+        self.assertEqual(TrainingConfigSessionDict(dict(base)).checkpoint_interval, 100)
+        self.assertEqual(TrainingConfigSessionDict({**base, "checkpoint_interval": 7}).to_dict()["checkpoint_interval"], 7)
+        for invalid in (0, -1, 1.5, True, "100", None):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                TrainingConfigSessionDict({**base, "checkpoint_interval": invalid})
+
     def test_correct_input(self):
         config_session = {
             "device_name": "cpu",

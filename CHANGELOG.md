@@ -7,12 +7,21 @@
   experiment from existing weights still leaves these values and the optimizer fresh.
 - Keep separate randomness states for reconstructing the experimental setup and
   continuing training. Add CPU tests comparing uninterrupted and recovered runs.
-- Require the saved progress to correspond to a completed training-and-validation
-  epoch. Older runs without continuation randomness states can still be loaded,
-  with a warning, if their other required states are present and consistent.
-- Explain the current recovery assumptions and limitations in the README.
-  Preserving a complete checkpoint after an arbitrary interruption and correcting
-  the saved best-model metadata remain part of #32.
+- Use TorchData's `StatefulDataLoader` and save all recovery states every
+  `checkpoint_interval` completed iterations (default 100), as well as at phase
+  boundaries. Resume inside training or validation without repeating completed
+  batches or resetting the current epoch's accumulated metrics. Require
+  `torchdata>=0.11` and `torch>=2.6`.
+- Atomically replace the latest checkpoint so a failed save leaves the previous
+  recovery point intact, including an initial save before the first epoch.
+- Save updated best-validation losses and their epochs alongside the latest
+  training state. Keep the selected model's weights and epoch separately within
+  the checkpoint, and restore its inference export on recovery if needed.
+- Test interrupted runs, last-batch and phase boundaries, loader randomness,
+  worker prefetching, and failed saves against uninterrupted training.
+- Break compatibility with v0.1.x experiment recovery and remove the separate-file
+  saving methods. Reject incompatible loader settings and unsupported checkpoint
+  formats. Keep interrupted run directories and document the recovery assumptions.
 
 ## 0.1.4 - 2026-09-09
 
