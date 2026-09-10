@@ -135,7 +135,8 @@ class MyTrainingSession(TrainingBaseSession):
         
         Similarly to the `loss_function` above, this function receives all its inputs from the key-value pairs of the 
         `forward_pass`. The `keyword_maps` argument of the `BaseMetricsClass` can translate the keywords between the two,
-        in case they are different.
+        in case they are different. You only need to map the names that differ; other arguments and their defaults
+        are kept. Ambiguous mappings are rejected.
         
         While you specify the subclasses of `BaseMetricsClass` in this function, which are essentially groups of similar 
         metrics around one particular task, which metrics from every family to log for any particular experiment run is

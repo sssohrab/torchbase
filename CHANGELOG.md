@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve unmapped metric arguments and defaults when applying partial keyword
+  mappings. Handle each metric's signature separately and reject conflicting
+  mappings or duplicate inputs. Test both training and validation invocation.
 - Copy configuration settings without modifying the caller's dictionary or sharing
   nested values. Reject unknown top-level and session fields instead of dropping
   them when saving; retain custom settings in the supported sections.
