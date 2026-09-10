@@ -190,8 +190,7 @@ class TrainingBaseSession(ABC):
                                     "This is not a valid source".format(source_states_dir))
 
         if not os.path.exists(os.path.join(source_states_dir, SAVED_CHECKPOINT_NAME)):
-            raise FileNotFoundError("No checkpoint.pth found. Resuming v0.1.x separate-file checkpoints is not "
-                                    "supported in v0.2.x; continue with the old version or start a new experiment.")
+            raise FileNotFoundError("No checkpoint.pth found. A complete checkpoint is required to resume an experiment.")
 
     def add_writer_custom_scalar_logging_layout(self, layout_dict: Dict):
         if is_custom_scalar_logging_layout_valid(layout_dict,
@@ -302,13 +301,11 @@ class TrainingBaseSession(ABC):
         source_states_dir_path = os.path.join(os.path.dirname(self.run_dir), source_run_dir_tag, "states")
         checkpoint_path = os.path.join(source_states_dir_path, SAVED_CHECKPOINT_NAME)
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-        required = {"format_version", "network", "optimizer", "progress_train", "values_logger_train",
+        required = {"network", "optimizer", "progress_train", "values_logger_train",
                     "validation", "best_validation_loss_dict", "best_model", "best_model_epoch", "rng_state",
                     "phase", "validation_index", "dataloader_train", "validation_names"}
         if not isinstance(checkpoint, dict) or not required.issubset(checkpoint):
-            raise ValueError("Incomplete or unsupported checkpoint: required training state is missing.")
-        if checkpoint["format_version"] != 3:
-            raise ValueError("Unsupported checkpoint format version: {}".format(checkpoint["format_version"]))
+            raise ValueError("Invalid checkpoint: required training state is missing.")
         self.network.load_state_dict(checkpoint["network"])
         if not create_run_dir_afresh:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
@@ -420,7 +417,6 @@ class TrainingBaseSession(ABC):
             best_model = None
             best_model_epoch = None
         checkpoint = {
-            "format_version": 3,
             "phase": self._phase,
             "validation_index": self._validation_index,
             "validation_names": list(self.datasets_valid_dict.names),

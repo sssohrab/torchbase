@@ -296,7 +296,7 @@ class TrainingBaseSessionResumeUnitTest(unittest.TestCase):
         original.train()
         # Only this test's disposable checkpoint is modified.
         Path(original.run_dir, "states", SAVED_CHECKPOINT_NAME).unlink()
-        with self.assertRaisesRegex(FileNotFoundError, "v0.1.x"):
+        with self.assertRaisesRegex(FileNotFoundError, "checkpoint.pth"):
             self.resume(original)
 
     def test_interrupted_training_or_validation_replays_from_phase_boundary(self):
@@ -613,13 +613,16 @@ class TrainingBaseSessionResumeUnitTest(unittest.TestCase):
         self.assert_nested_equal(torch.load(Path(original.run_dir, "network.pth"), weights_only=True),
                                  original.network.state_dict())
 
-    def test_invalid_or_unsupported_checkpoint_is_rejected(self):
+    def test_invalid_or_incomplete_checkpoint_is_rejected(self):
         original = self.make_session(epochs=1)
         original.train()
         checkpoint_path = Path(original.run_dir, "states", SAVED_CHECKPOINT_NAME)
         checkpoint = torch.load(checkpoint_path, weights_only=True)
-        for corrupt in ({}, {**checkpoint, "format_version": 1}, {**checkpoint, "format_version": 999}):
-            with self.subTest(version=corrupt.get("format_version")):
+        invalid = [("not a dictionary", []), ("empty", {})]
+        invalid += [("missing " + name, {key: value for key, value in checkpoint.items() if key != name})
+                    for name in checkpoint]
+        for case, corrupt in invalid:
+            with self.subTest(case=case):
                 torch.save(corrupt, checkpoint_path)
                 with self.assertRaisesRegex(ValueError, "checkpoint"):
                     self.resume(original)

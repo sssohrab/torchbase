@@ -15,9 +15,8 @@
   state and reset behavior for training and each validation dataset. Preserve this
   state during mid-epoch recovery. `ValuesLogger.epoch_values` holds exact scores;
   `average_of_epoch` and `average_overall` remain averages of batch scores.
-- Advance checkpoints to format 3; earlier unreleased format-2 checkpoints must
-  use their original code to resume. Test uneven batches against whole-dataset
-  references, dataset isolation, resets and interrupted checkpoint saves.
+- Test uneven batches against whole-dataset references, dataset isolation, resets
+  and interrupted checkpoint saves.
 - Preserve unmapped metric arguments and defaults when applying partial keyword
   mappings. Handle each metric's signature separately and reject conflicting
   mappings or duplicate inputs. Test both training and validation invocation.
@@ -49,9 +48,10 @@
   the checkpoint, and restore its inference export on recovery if needed.
 - Test interrupted runs, last-batch and phase boundaries, loader randomness,
   worker prefetching, and failed saves against uninterrupted training.
-- Break compatibility with v0.1.x experiment recovery and remove the separate-file
-  saving methods. Reject incompatible loader settings and unsupported checkpoint
-  formats. Keep interrupted run directories and document the recovery assumptions.
+- Use one unversioned checkpoint structure in v0.2.x, with no backward compatibility
+  or migration support. Remove the separate-file saving methods and reject missing
+  or inconsistent recovery state. Keep interrupted run directories and document
+  the recovery assumptions.
 
 ## 0.1.4 - 2026-09-09
 

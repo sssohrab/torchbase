@@ -326,15 +326,15 @@ class EpochMetricSessionUnitTest(unittest.TestCase):
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(calls[0].args[2], 1)
 
-    def test_old_checkpoint_format_is_rejected(self):
-        session = self.make_session("old", epochs=1)
+    def test_checkpoint_recovers_without_a_format_version(self):
+        session = self.make_session("unversioned", epochs=1)
         session.train()
         path = Path(session.run_dir, "states/checkpoint.pth")
         checkpoint = torch.load(path, weights_only=True)
-        checkpoint["format_version"] = 2
-        torch.save(checkpoint, path)
-        with self.assertRaisesRegex(ValueError, "Unsupported checkpoint format"):
-            self.make_session("recover-old", source=Path(session.run_dir).name)
+        self.assertNotIn("format_version", checkpoint)
+        recovered = self.make_session("recover-unversioned", source=Path(session.run_dir).name, epochs=1)
+        self.assert_reference(recovered)
+        self.assertEqual(recovered.value_logger_train.state_dict(), session.value_logger_train.state_dict())
 
     def test_factory_must_not_share_state_between_metrics_or_datasets(self):
         shared = BinaryClassificationMetrics().get_epoch_metric("f1_score_macro")
