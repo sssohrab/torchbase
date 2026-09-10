@@ -1,6 +1,8 @@
 """Small CPU experiments exercising real save/load/continue behavior."""
 
 from dataclasses import asdict
+from copy import deepcopy
+import json
 from pathlib import Path
 import random
 import tempfile
@@ -196,6 +198,43 @@ class TrainingBaseSessionResumeUnitTest(unittest.TestCase):
         resumed = self.resume(original)
         self.assert_states_equal(resumed, original)
         self.assertEqual(resumed.dataset_train.data, original.dataset_train.data)
+
+    def test_saved_config_can_construct_and_resume_a_session_without_mutating_input(self):
+        config = ResumeSession.get_config(num_epochs=1)
+        config["session"]["loss_function_params"] = {"options": {"weights": [1.0, 2.0]}}
+        config["data"]["custom"] = {"shape": [2, 1]}
+        config["metrics"]["custom"] = ["score"]
+        config["network"]["custom"] = {"layers": [2, 1]}
+        original = deepcopy(config)
+        session = ResumeSession(config, runs_parent_dir=self.storage.name, tag_postfix="config-original")
+        self.addCleanup(session.writer.close)
+        self.assertEqual(config, original)
+        saved = json.loads(Path(session.run_dir, "config.json").read_text())
+        self.assertEqual(saved["session"], session.config_session.to_dict())
+        for section in ("data", "metrics", "network"):
+            self.assertEqual(saved[section], original[section])
+        session.train()
+
+        fresh = ResumeSession(saved, runs_parent_dir=self.storage.name, tag_postfix="config-fresh")
+        self.addCleanup(fresh.writer.close)
+        resumed = ResumeSession(saved, runs_parent_dir=self.storage.name, create_run_dir_afresh=False,
+                                source_run_dir_tag=Path(session.run_dir).name)
+        self.addCleanup(resumed.writer.close)
+        self.assert_states_equal(resumed, session)
+        self.assertEqual(json.loads(Path(fresh.run_dir, "config.json").read_text()), saved)
+        recovered_configs = list(Path(session.run_dir).glob("config_*.json"))
+        self.assertEqual(len(recovered_configs), 1)
+        self.assertEqual(json.loads(recovered_configs[0].read_text()), saved)
+        for current in (session, fresh, resumed):
+            current.config_session.loss_function_params["options"]["weights"].clear()
+            current.config_data["custom"]["shape"].clear()
+            current.config_metrics["custom"].clear()
+            current.config_network["custom"]["layers"].clear()
+        self.assertEqual(config, original)
+        self.assertEqual(saved["metrics"], original["metrics"])
+        self.assertEqual(saved["data"], original["data"])
+        self.assertEqual(saved["network"], original["network"])
+        self.assertEqual(saved["session"]["loss_function_params"], original["session"]["loss_function_params"])
 
     def test_invalid_validation_sets_fail_before_dataloader_initialization(self):
         dataset = Dataset.from_dict({"inputs": [[1.0, 2.0]], "target": [[3.0]]})

@@ -1,4 +1,6 @@
-from dataclasses import dataclass, fields, field, asdict
+from dataclasses import dataclass, fields, field, asdict, MISSING
+from copy import deepcopy
+import math
 from typing import Dict, Tuple
 
 import torch
@@ -71,8 +73,30 @@ def is_custom_scalar_logging_layout_valid(layout: Dict,
     return validate_subgroup(layout)
 
 
+def _copy_config(config: dict) -> dict:
+    """Copy JSON-compatible settings, allowing tuples as JSON arrays."""
+    try:
+        json.dumps(config, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise ValueError("The config must contain JSON-compatible values: {}".format(error)) from error
+
+    def check_keys(value):
+        if isinstance(value, dict):
+            if any(not isinstance(key, str) for key in value):
+                raise ValueError("All config dictionary keys must be strings, including nested settings.")
+            for item in value.values():
+                check_keys(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                check_keys(item)
+
+    check_keys(config)
+    return deepcopy(config)
+
+
 @dataclass
 class TrainingConfigSessionDict:
+    """Declared session settings, copied from the caller; unknown fields are rejected."""
     device_name: str
     num_epochs: int
     mini_batch_size: int
@@ -83,50 +107,44 @@ class TrainingConfigSessionDict:
     loss_function_params: None | dict = None
 
     def __init__(self, config: dict):
+        if not isinstance(config, dict):
+            raise TypeError("The session config must be a dictionary.")
+        expected = {field_info.name for field_info in fields(self)}
+        unknown = config.keys() - expected
+        if unknown:
+            raise ValueError("Unknown session config fields: {}".format(
+                ", ".join(sorted(map(str, unknown)))))
+        missing = [info.name for info in fields(self) if info.default is MISSING and info.name not in config]
+        if missing:
+            raise ValueError("Missing required session config fields: {}".format(", ".join(missing)))
         for field_info in fields(self):
-            field_name = field_info.name
-            if field_name not in config.keys():
-                config[field_name] = field_info.default
-
-        for key, value in config.items():
-            setattr(self, key, value)
-        if not self.is_valid():
-            raise ValueError("The passed `config` does not match the required types. Debug to see which field(s) fail.")
+            setattr(self, field_info.name, config.get(field_info.name, field_info.default))
+        invalid = self._invalid_fields()
+        if invalid:
+            raise ValueError("Invalid session config fields: {}".format(", ".join(invalid)))
+        if self.loss_function_params is not None:
+            self.loss_function_params = _copy_config(self.loss_function_params)
 
     def to_dict(self) -> dict:
-        # TODO: Add test
         return asdict(self)
 
     def is_valid(self) -> bool:
-        if not isinstance(self.device_name, str):
-            return False
-        if not isinstance(self.num_epochs, int):
-            return False
-        if self.num_epochs <= 0:
-            return False
-        if not isinstance(self.mini_batch_size, int):
-            return False
-        if self.mini_batch_size <= 0:
-            return False
-        if not isinstance(self.learning_rate, float):
-            return False
-        if self.learning_rate <= 0:
-            return False
-        if not isinstance(self.weight_decay, float):
-            return False
-        if self.weight_decay < 0:
-            return False
-        if not isinstance(self.dataloader_num_workers, int):
-            return False
-        if self.dataloader_num_workers < 0:
-            return False
-        if type(self.checkpoint_interval) is not int or self.checkpoint_interval <= 0:
-            return False
-        if self.loss_function_params is not None:
-            if not isinstance(self.loss_function_params, dict):
-                return False
+        return not self._invalid_fields()
 
-        return True
+    def _invalid_fields(self) -> list[str]:
+        checks = {
+            "device_name": isinstance(self.device_name, str) and bool(self.device_name),
+            "num_epochs": type(self.num_epochs) is int and self.num_epochs > 0,
+            "mini_batch_size": type(self.mini_batch_size) is int and self.mini_batch_size > 0,
+            "learning_rate": isinstance(self.learning_rate, float) and math.isfinite(self.learning_rate)
+                             and self.learning_rate > 0,
+            "weight_decay": isinstance(self.weight_decay, float) and math.isfinite(self.weight_decay)
+                            and self.weight_decay >= 0,
+            "dataloader_num_workers": type(self.dataloader_num_workers) is int and self.dataloader_num_workers >= 0,
+            "checkpoint_interval": type(self.checkpoint_interval) is int and self.checkpoint_interval > 0,
+            "loss_function_params": self.loss_function_params is None or isinstance(self.loss_function_params, dict),
+        }
+        return [name for name, valid in checks.items() if not valid]
 
 
 @dataclass
