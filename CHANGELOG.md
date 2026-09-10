@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Copy configuration settings without modifying the caller's dictionary or sharing
+  nested values. Reject unknown top-level and session fields instead of dropping
+  them when saving; retain custom settings in the supported sections.
+- Name missing or invalid configuration fields, and reject values that cannot be
+  saved reliably as JSON before creating a run directory. Test saved configurations
+  when starting and recovering experiments; tuples still load from JSON as lists.
 - Require nonempty validation datasets with matching tuple lengths and unique
   names. Reject invalid validation setups before dataloader initialization.
 - Make `TypedDictIterable` reject one-shot and unsized inputs without consuming

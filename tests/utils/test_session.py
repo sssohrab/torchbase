@@ -3,6 +3,7 @@ from torchbase.utils.session import is_custom_scalar_logging_layout_valid
 from torchbase.utils.session import RandomnessGeneratorStates
 
 import unittest
+from copy import deepcopy
 
 import torch
 import numpy as np
@@ -65,6 +66,84 @@ class CustomScalarLoggingLayoutValidityUnitTest(unittest.TestCase):
 
 
 class TrainingConfigSessionDictUnitTest(unittest.TestCase):
+
+    def setUp(self):
+        self.base = {"device_name": "cpu", "num_epochs": 1, "mini_batch_size": 3, "learning_rate": 0.01}
+
+    def test_defaults_do_not_mutate_input(self):
+        original = deepcopy(self.base)
+        config = TrainingConfigSessionDict(self.base)
+        self.assertEqual(self.base, original)
+        self.assertEqual(config.weight_decay, 0.0)
+        self.assertEqual(config.dataloader_num_workers, 0)
+        self.assertEqual(config.checkpoint_interval, 100)
+        self.assertIsNone(config.loss_function_params)
+
+    def test_nested_parameters_and_export_are_independent(self):
+        self.base["loss_function_params"] = {"weights": [1.0, 2.0], "options": {"reduction": "mean"}}
+        original = deepcopy(self.base)
+        first = TrainingConfigSessionDict(self.base)
+        second = TrainingConfigSessionDict(self.base)
+        first.loss_function_params["weights"].append(3.0)
+        first.loss_function_params["options"]["reduction"] = "sum"
+        self.assertEqual(self.base, original)
+        self.assertEqual(second.loss_function_params, original["loss_function_params"])
+        exported = second.to_dict()
+        exported["loss_function_params"]["weights"].clear()
+        self.assertEqual(second.loss_function_params, original["loss_function_params"])
+        self.base["loss_function_params"]["weights"].clear()
+        self.assertEqual(second.loss_function_params, original["loss_function_params"])
+
+    def test_json_round_trip_includes_every_field(self):
+        config = TrainingConfigSessionDict({**self.base, "weight_decay": 0.1, "dataloader_num_workers": 2,
+                                           "checkpoint_interval": 7,
+                                           "loss_function_params": {"weights": [1.0, 2.0], "option": None}})
+        saved = json.loads(json.dumps(config.to_dict()))
+        self.assertEqual(TrainingConfigSessionDict(saved).to_dict(), config.to_dict())
+
+    def test_unknown_fields_are_rejected_without_mutation(self):
+        for key in ("learning_raet", "custom_setting", "to_dict", "is_valid"):
+            config = {**self.base, key: 1}
+            original = deepcopy(config)
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                TrainingConfigSessionDict(config)
+            self.assertEqual(config, original)
+
+    def test_each_required_field_is_reported_without_mutation(self):
+        for key in self.base:
+            config = {name: value for name, value in self.base.items() if name != key}
+            original = deepcopy(config)
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                TrainingConfigSessionDict(config)
+            self.assertEqual(config, original)
+
+    def test_invalid_fields_are_named(self):
+        invalid_values = {
+            "device_name": [None, 1, ""],
+            "num_epochs": [None, 0, -1, 1.5, True],
+            "mini_batch_size": [None, 0, -1, 1.5, True],
+            "learning_rate": [None, 0.0, -0.1, 1, True, float("nan"), float("inf")],
+            "weight_decay": [None, -0.1, 1, True, float("nan"), float("inf")],
+            "dataloader_num_workers": [None, -1, 1.5, True],
+            "checkpoint_interval": [None, 0, -1, 1.5, True],
+            "loss_function_params": [1, [], "mean"],
+        }
+        for key, values in invalid_values.items():
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, key):
+                    TrainingConfigSessionDict({**self.base, key: value})
+
+    def test_non_dictionary_input_is_rejected(self):
+        for value in (None, [], "config", 1):
+            with self.subTest(value=value), self.assertRaises(TypeError):
+                TrainingConfigSessionDict(value)
+
+    def test_is_valid_after_editing_a_field(self):
+        config = TrainingConfigSessionDict(self.base)
+        config.num_epochs = 0
+        self.assertFalse(config.is_valid())
+        config.num_epochs = 2
+        self.assertTrue(config.is_valid())
 
     def test_checkpoint_interval_validation_and_round_trip(self):
         base = {"device_name": "cpu", "num_epochs": 1, "mini_batch_size": 3, "learning_rate": 0.01}

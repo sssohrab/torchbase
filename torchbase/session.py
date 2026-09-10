@@ -1,4 +1,4 @@
-from torchbase.utils.session import TrainingConfigSessionDict
+from torchbase.utils.session import TrainingConfigSessionDict, _copy_config
 from torchbase.utils.session import generate_log_dir_tag, is_custom_scalar_logging_layout_valid
 from torchbase.utils.session import RandomnessGeneratorStates
 from torchbase.utils.data import ValidationDatasetsDict
@@ -64,7 +64,6 @@ class TrainingBaseSession(ABC):
 
         self.writer = SummaryWriter(log_dir=self.run_dir)
 
-        self.config_metrics = config["metrics"]
         metrics_classes = self.init_metrics()
         self.metrics_functionals_dict = self.get_metrics_functionals_dict_from_metrics_classes(metrics_classes)
 
@@ -109,14 +108,21 @@ class TrainingBaseSession(ABC):
         if not isinstance(config, dict):
             raise TypeError("Pass a python dictionary as session `config`.")
         expected_keys = ["session", "data", "network", "metrics"]
-        if not all(key in config.keys() for key in expected_keys):
-            raise ValueError("`config` should specify all of these fields {}".format(expected_keys))
+        missing = [key for key in expected_keys if key not in config]
+        if missing:
+            raise ValueError("Missing required config sections: {}".format(", ".join(missing)))
+        unknown = config.keys() - set(expected_keys)
+        if unknown:
+            raise ValueError("Unknown config sections: {}".format(", ".join(sorted(map(str, unknown)))))
+        for key in expected_keys:
+            if not isinstance(config[key], dict):
+                raise TypeError("The `{}` config section must be a dictionary.".format(key))
+        architecture = config["network"].get("architecture")
+        if not isinstance(architecture, str) or not architecture:
+            raise ValueError("The network config requires a nonempty `architecture` class name.")
 
-        if "architecture" not in config["network"].keys():
-            raise ValueError(
-                "The 'network' `config` should specify the class name of the network's 'architecture' as a field.")
-
-        return TrainingConfigSessionDict(config["session"]), config["data"], config["metrics"], config["network"]
+        return (TrainingConfigSessionDict(config["session"]), _copy_config(config["data"]),
+                _copy_config(config["metrics"]), _copy_config(config["network"]))
 
     @staticmethod
     def setup_run_dir_for_logging(runs_parent_dir: None | str = None,

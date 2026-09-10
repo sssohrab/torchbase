@@ -68,7 +68,7 @@ class MyTrainingSession(TrainingBaseSession):
             return RandomRotation(degrees=(-10, 10))(image)
 
         data_train, data_valid = split_iterables([torch.randn((self.config_data["image_size"])) for _ in range(20)],
-                                                 portions=self.config_data["split_portions"],
+                                                 portions=tuple(self.config_data["split_portions"]),
                                                  shuffle=True)
 
         dataset_train = Dataset.from_dict({"image": data_train}).map(lambda x: augment(x))
@@ -197,6 +197,10 @@ config = {
   The `self.init_metrics()` method has access to this field.
 - The `"network"` field has only the `"architecture"` subfield as necessary, where you should just specify the name of
   your network. Here you can specify any hyperparameter your network instantiation would need.
+
+The session keeps its own copy of these settings without changing your dictionary. Unknown top-level or `"session"`
+fields are rejected; custom settings belong in the other sections or in `"loss_function_params"`.
+Use JSON-compatible values and string dictionary keys. Tuples are also accepted, but load from JSON as lists.
 
 Why do we need this separate config dictionary while we can have it all implemented within the abstract methods of the
 class? The idea is that the part of the implementation that is less likely to change very frequently will go to the
