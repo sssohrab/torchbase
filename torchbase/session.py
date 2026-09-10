@@ -2,7 +2,7 @@ from torchbase.utils.session import TrainingConfigSessionDict, _copy_config
 from torchbase.utils.session import generate_log_dir_tag, is_custom_scalar_logging_layout_valid
 from torchbase.utils.session import RandomnessGeneratorStates
 from torchbase.utils.data import ValidationDatasetsDict
-from torchbase.utils.metrics import BaseMetricsClass
+from torchbase.utils.metrics import BaseMetricsClass, _keyword_arguments
 from torchbase.utils.logger import ProgressManager, ValuesLogger, LoggableParams
 from torchbase.utils.checkpoint import atomic_torch_save
 
@@ -16,7 +16,6 @@ from datasets import Dataset
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Any, Callable
-import inspect
 import os
 import random
 import json
@@ -465,9 +464,11 @@ class TrainingBaseSession(ABC):
             requested_metrics_list = self.config_metrics[metrics_class.__class__.__name__]
             implemented_metrics = metrics_class.get_all_metric_functionals_dict()
             for metric in requested_metrics_list:
+                if metric == "loss":
+                    raise ValueError("Metric name `loss` is reserved for the session's loss function.")
                 if metric not in implemented_metrics:
-                    raise ValueError("The metrics config requested to use `{}`, which is not available in the"
-                                     "set of metrics implemented at `{}`".format(metric, metrics_class.__name__))
+                    raise ValueError("The metrics config requested to use `{}`, which is not available in the "
+                                     "set of metrics implemented at `{}`".format(metric, type(metrics_class).__name__))
 
             if len(requested_metrics_list) > 0:
                 _metrics_functionals_dict = metrics_class.get_metrics(requested_metrics_list)
@@ -543,8 +544,7 @@ class TrainingBaseSession(ABC):
     def do_one_training_iteration(self, mini_batch: Dict[str, Any | torch.Tensor]) -> None:
         self.network.train()
         outs_dict = self.forward_pass(mini_batch)
-        loss_function_signature = inspect.signature(self.loss_function)
-        loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
+        loss = self.loss_function(**_keyword_arguments(self.loss_function, outs_dict))
         assert not torch.isnan(loss), "A NaN value detected during loss function evaluation."
 
         self.optimizer.zero_grad()
@@ -566,8 +566,7 @@ class TrainingBaseSession(ABC):
         with torch.no_grad():
             outs_dict = self.forward_pass(mini_batch)
 
-        loss_function_signature = inspect.signature(self.loss_function)
-        loss = self.loss_function(**{k: v for k, v in outs_dict.items() if k in loss_function_signature.parameters})
+        loss = self.loss_function(**_keyword_arguments(self.loss_function, outs_dict))
         self.progress_valid_dict[valid_dataset_name].increment_iter(self.infer_mini_batch_size(mini_batch))
         self.value_logger_valid_dict[valid_dataset_name].update(
             self.loggable_valid_dict[valid_dataset_name](**{"loss_tensor": loss}, **outs_dict), metric_inputs=outs_dict)

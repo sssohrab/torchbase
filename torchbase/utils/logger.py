@@ -6,7 +6,7 @@ import inspect
 import json
 from copy import deepcopy
 
-from torchbase.utils.metrics import EpochMetric
+from torchbase.utils.metrics import EpochMetric, _keyword_arguments
 
 
 @dataclass
@@ -93,8 +93,7 @@ class ValuesLogger:
         for metric in self.epoch_metrics.values():
             if metric_inputs is None:
                 raise ValueError("Epoch metrics require metric_inputs when updating the logger.")
-            signature = inspect.signature(metric.update)
-            metric.update(**{key: value for key, value in metric_inputs.items() if key in signature.parameters})
+            metric.update(**_keyword_arguments(metric.update, metric_inputs))
 
         self.current_values = values_dict
         current_samples = self.progress_manager.samples_current_iter
@@ -197,9 +196,7 @@ class LoggableParams:
     def evaluate_functionals(self, **kwargs) -> Dict[str, float]:
         values_dict = {}
         for name, functional in self.get_functional_dict().items():
-            sig = inspect.signature(functional)
-            func_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-            result = functional(**func_kwargs)
+            result = functional(**_keyword_arguments(functional, kwargs))
             if not isinstance(result, float):
                 raise ValueError("Expected the result of `{}` to be a float, got {} instead.".format(
                     name, type(result).__name__))

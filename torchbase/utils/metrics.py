@@ -5,6 +5,14 @@ import inspect
 import keyword
 
 
+def _keyword_arguments(function: Callable, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Filter explicit arguments, but pass all inputs to functions accepting **kwargs."""
+    parameters = inspect.signature(function).parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return inputs
+    return {name: value for name, value in inputs.items() if name in parameters}
+
+
 def _map_metric(func: Callable, keyword_maps: Dict[str, str]) -> Callable:
     original_sig = inspect.signature(func)
     explicit = {name: param for name, param in original_sig.parameters.items()

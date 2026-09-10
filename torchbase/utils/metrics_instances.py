@@ -11,6 +11,11 @@ class BinaryClassificationMetrics(BaseMetricsClass):
     def get_epoch_metric(self, name: str) -> EpochMetric | None:
         if name in ("precision_micro", "precision_macro", "recall_micro", "recall_macro",
                     "f1_score_micro", "f1_score_macro"):
+            # Custom scoring/preprocessing needs its own get_epoch_metric implementation.
+            for method in (name, "_check_and_prepare_inputs", "_round_predictions_for_point_based_metrics"):
+                implementation = getattr(self, method)
+                if getattr(implementation, "__func__", implementation) is not getattr(BinaryClassificationMetrics, method):
+                    return None
             return _BinaryClassificationEpochMetric(name)
         return None
 

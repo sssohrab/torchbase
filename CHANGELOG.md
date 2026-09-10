@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Preserve every sample when splitting with fractional portions, including aligned
+  dictionary columns and trailing zero-sized splits.
+- Pass extra keyword arguments to losses, batch metrics and epoch accumulators
+  that accept `**kwargs`. Keep explicit-argument filtering and keyword mappings.
+- Reserve the metric name `loss` for the session loss, and report unknown metrics
+  with the name of their metrics class.
+- Keep custom binary scoring or preprocessing as batch statistics unless a matching
+  epoch accumulator is supplied; unchanged inherited metrics retain built-in accumulators.
 - Separate sample-weighted batch metric averages (`batch_means` in TensorBoard)
   from whole-epoch metrics (`epochs`). Keep iteration values and `loss/epochs`
   unchanged; loss aggregation assumes mean-reduced batch losses. Custom layouts
