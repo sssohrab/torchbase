@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Require nonempty validation datasets with matching tuple lengths and unique
+  names. Reject invalid validation setups before dataloader initialization.
+- Make `TypedDictIterable` reject one-shot and unsized inputs without consuming
+  them; accepted collections are preserved. Splitting still supports generators,
+  and an empty dictionary now produces empty splits rather than raising `KeyError`.
 - Recover the training and validation progress counters and logged values when
   continuing an existing experiment, instead of resetting them. Starting a new
   experiment from existing weights still leaves these values and the optimizer fresh.

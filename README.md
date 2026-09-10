@@ -50,6 +50,8 @@ class MyTrainingSession(TrainingBaseSession):
         The validation datasets should be wrapped around a `torchbase.ValidationDatasetsDict` object. This forces
         you to do some extra work, but having multiple validation datasets can be very useful, e.g., to monitor 
         the effect of data augmentation. 
+        Provide at least one nonempty validation dataset, with equally sized tuples of datasets, demo flags and
+        unique names; invalid combinations are rejected before dataloaders are created.
         
         You can mark some of the validation datasets as "only for demo". In this case they will not be used for 
         the actual validation process but only logged. This can be useful, e.g., if you are curious how your network

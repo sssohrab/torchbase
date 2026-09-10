@@ -197,6 +197,22 @@ class TrainingBaseSessionResumeUnitTest(unittest.TestCase):
         self.assert_states_equal(resumed, original)
         self.assertEqual(resumed.dataset_train.data, original.dataset_train.data)
 
+    def test_invalid_validation_sets_fail_before_dataloader_initialization(self):
+        dataset = Dataset.from_dict({"inputs": [[1.0, 2.0]], "target": [[3.0]]})
+        invalid_sets = (
+            ValidationDatasetsDict((dataset,), (False,), ()),
+            ValidationDatasetsDict((dataset, dataset), (False, True), ("valid", "valid")),
+            ValidationDatasetsDict((), (), ()),
+            ValidationDatasetsDict((dataset.select([]),), (False,), ("valid",)),
+        )
+        for index, validation in enumerate(invalid_sets):
+            with self.subTest(index=index), \
+                    patch.object(ResumeSession, "init_datasets", return_value=(dataset, validation)), \
+                    patch.object(ResumeSession, "init_dataloaders") as init_loaders:
+                with self.assertRaisesRegex(ValueError, "valid `datasets_valid_dict`"):
+                    self.make_session(tag="invalid-validation-{}".format(index))
+                init_loaders.assert_not_called()
+
     def test_resumed_training_matches_uninterrupted_training(self):
         uninterrupted = self.make_session(tag="uninterrupted")
         uninterrupted.train()
