@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Callable
 from functools import wraps
+from abc import ABC, abstractmethod
 import inspect
 import keyword
 
@@ -40,6 +41,30 @@ def _map_metric(func: Callable, keyword_maps: Dict[str, str]) -> Callable:
 
     mapped_function.__signature__ = mapped_sig
     return mapped_function
+
+
+class EpochMetric(ABC):
+    """An explicitly stateful metric. State must be safe for weights-only checkpoints."""
+
+    @abstractmethod
+    def update(self, **kwargs) -> None:
+        pass
+
+    @abstractmethod
+    def compute(self) -> float:
+        pass
+
+    @abstractmethod
+    def reset(self) -> None:
+        pass
+
+    @abstractmethod
+    def state_dict(self) -> Dict:
+        pass
+
+    @abstractmethod
+    def load_state_dict(self, state: Dict) -> None:
+        pass
 
 
 class BaseMetricsClass:
@@ -88,3 +113,22 @@ class BaseMetricsClass:
                     "Method `{}` is not implemented in the `{}`.".format(method_name, type(self).__name__))
 
         return method_dict
+
+    def get_epoch_metric(self, name: str) -> EpochMetric | None:
+        """Return a fresh accumulator for this metric, or None for batch statistics only."""
+        return None
+
+    def get_epoch_metrics(self, methods: List[str]) -> Dict[str, EpochMetric]:
+        self.get_metrics(methods)  # Validate names and mappings as for batch functionals.
+        result = {}
+        for name in methods:
+            metric = self.get_epoch_metric(name)
+            if metric is not None:
+                if not isinstance(metric, EpochMetric):
+                    raise TypeError("get_epoch_metric must return an EpochMetric or None.")
+                if any(param.kind not in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.VAR_KEYWORD)
+                       for param in inspect.signature(metric.update).parameters.values()):
+                    raise TypeError("EpochMetric.update must have keyword-only arguments.")
+                metric.update = _map_metric(metric.update, self.keyword_maps)
+                result[name] = metric
+        return result

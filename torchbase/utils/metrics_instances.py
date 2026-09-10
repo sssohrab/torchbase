@@ -1,4 +1,4 @@
-from torchbase.utils.metrics import BaseMetricsClass
+from torchbase.utils.metrics import BaseMetricsClass, EpochMetric
 
 from sklearn import metrics
 import numpy as np
@@ -8,6 +8,12 @@ from typing import Tuple
 
 
 class BinaryClassificationMetrics(BaseMetricsClass):
+    def get_epoch_metric(self, name: str) -> EpochMetric | None:
+        if name in ("precision_micro", "precision_macro", "recall_micro", "recall_macro",
+                    "f1_score_micro", "f1_score_macro"):
+            return _BinaryClassificationEpochMetric(name)
+        return None
+
     @staticmethod
     def _check_and_prepare_inputs(*, binary_ground_truth: torch.Tensor,
                                   prediction_probabilities: torch.Tensor) -> Tuple[np.ndarray, np.ndarray]:
@@ -114,6 +120,56 @@ class BinaryClassificationMetrics(BaseMetricsClass):
         value = metrics.average_precision_score(y_true=binary_ground_truth, y_score=prediction_probabilities)
 
         return value
+
+
+class _BinaryClassificationEpochMetric(EpochMetric):
+    """Exact flattened binary scores with four counts, not retained predictions."""
+
+    def __init__(self, name):
+        self.name = name
+        self.reset()
+
+    def update(self, *, binary_ground_truth: torch.Tensor, prediction_probabilities: torch.Tensor) -> None:
+        truth, probabilities = BinaryClassificationMetrics._check_and_prepare_inputs(
+            binary_ground_truth=binary_ground_truth, prediction_probabilities=prediction_probabilities)
+        predicted = BinaryClassificationMetrics._round_predictions_for_point_based_metrics(probabilities)
+        counts = np.bincount(2 * truth.astype(np.int64) + predicted.astype(np.int64), minlength=4)
+        self.counts = [previous + int(current) for previous, current in zip(self.counts, counts)]
+
+    def compute(self) -> float:
+        tn, fp, fn, tp = self.counts
+        total = sum(self.counts)
+        if total == 0:
+            return float("nan")
+        if self.name.endswith("_micro"):
+            return (tn + tp) / total
+        # Match sklearn's default label set (labels present in truth or predictions)
+        # and zero_division=0, including single-class epochs.
+        scores = []
+        for correct, false_positive, false_negative in ((tn, fn, fp), (tp, fp, fn)):
+            if correct + false_positive + false_negative == 0:
+                continue
+            if self.name == "precision_macro":
+                numerator, denominator = correct, correct + false_positive
+            elif self.name == "recall_macro":
+                numerator, denominator = correct, correct + false_negative
+            else:
+                numerator, denominator = 2 * correct, 2 * correct + false_positive + false_negative
+            scores.append(numerator / denominator if denominator else 0.0)
+        return sum(scores) / len(scores)
+
+    def reset(self) -> None:
+        self.counts = [0, 0, 0, 0]  # TN, FP, FN, TP
+
+    def state_dict(self) -> dict:
+        return {"name": self.name, "counts": list(self.counts)}
+
+    def load_state_dict(self, state: dict) -> None:
+        counts = state.get("counts")
+        if (state.get("name") != self.name or not isinstance(counts, list) or len(counts) != 4
+                or any(type(count) is not int or count < 0 for count in counts)):
+            raise ValueError("Invalid or incompatible binary epoch metric state.")
+        self.counts = list(counts)
 
 
 class ImageReconstructionMetrics(BaseMetricsClass):

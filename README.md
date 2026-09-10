@@ -241,6 +241,16 @@ directory of your experiment runs will launch the web-service from where you cou
 logged parameters, judge whether you are going over- or under-fit, or decide the best set of hyperparameters across
 experiments.
 
+Iteration metrics describe each mini-batch. At epoch completion, their sample-weighted averages are logged under
+`batch_means`, not as whole-dataset scores. Binary precision, recall and F1 also have `epochs` scores computed from four accumulated
+confusion counts, independently for training and each validation dataset. Other metrics, including AUC and PSNR,
+remain batch statistics; no predictions are buffered. `loss/epochs` remains the sample-weighted mean of batch losses
+and assumes a mean-reduced loss. Update any custom TensorBoard layouts accordingly when moving from v0.1.x.
+
+For a custom whole-epoch metric, override `BaseMetricsClass.get_epoch_metric(name)` to return a fresh `EpochMetric`
+with keyword-only `update`, `compute`, `reset`, `state_dict` and `load_state_dict` methods. Its state is checkpointed
+and resets at the start of its dataset's next epoch, not when resuming inside an epoch.
+
 For various reasons, you may sometimes want to suspend the training process before it is finalized. `torchbase` provides
 you with the possibility to take over from the latest saved iteration of a past experiment, whether it was training
 or validating:
@@ -297,10 +307,8 @@ improve their records in the same epoch; `only_for_demo` datasets do not vote. T
 recorded separately as `best_model_epoch` (zero-based, like the loss records). The checkpoint may therefore contain
 two sets of weights when the latest and best models differ.
 
-The v0.2.x format is incompatible with v0.1.x experiment recovery. The old `save_training_states()`,
-`save_progress_and_log_states_for_valid_set()` and `save_network_and_optimizer_states()` methods are removed. Missing,
-incomplete or unsupported checkpoints raise an error. Keep old runs with their original environment to continue them,
-or explicitly load their weights with PyTorch in `init_network()` when starting a new experiment.
+v0.2.x uses a single checkpoint structure, with no backward compatibility or migration support for earlier versions.
+Recovery requires all states expected by the current code; missing or inconsistent states raise an error.
 
 Alternatively, passing the flag `create_run_dir_afresh=True`, but still specifying a `source_run_dir_tag` will create a
 new experiment starting from scratch but only initializing the weights of the network with the previously-trained ones
