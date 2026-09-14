@@ -29,6 +29,8 @@ which arguments it requires and whether or not you would like to log certain val
 
 This may look something like:
 
+The example reconstructs binary images and uses `torchvision` for augmentation (`pip install torchvision`).
+
 ```python
 from torchbase import TrainingBaseSession
 from torchbase.utils import ValidationDatasetsDict, BaseMetricsClass, split_iterables
@@ -47,7 +49,7 @@ class MyTrainingSession(TrainingBaseSession):
         Here you define and return your training dataset, as well as validation datasets. 
         They all should be instances of the Huggingface's dataset library, i.e., `datasets.Dataset` objects.
         
-        The validation datasets should be wrapped around a `torchbase.ValidationDatasetsDict` object. This forces
+        The validation datasets should be wrapped around a `torchbase.utils.ValidationDatasetsDict` object. This forces
         you to do some extra work, but having multiple validation datasets can be very useful, e.g., to monitor 
         the effect of data augmentation. 
         Provide at least one nonempty validation dataset, with equally sized tuples of datasets, demo flags and
@@ -67,13 +69,17 @@ class MyTrainingSession(TrainingBaseSession):
             from torchvision.transforms import RandomRotation
             return RandomRotation(degrees=(-10, 10))(image)
 
-        data_train, data_valid = split_iterables([torch.randn((self.config_data["image_size"])) for _ in range(20)],
+        data_train, data_valid = split_iterables([torch.rand((self.config_network["num_ch"],
+                                                             *self.config_data["image_size"])).round()
+                                                 for _ in range(20)],
                                                  portions=tuple(self.config_data["split_portions"]),
                                                  shuffle=True)
 
-        dataset_train = Dataset.from_dict({"image": data_train}).map(lambda x: augment(x))
-        dataset_valid = Dataset.from_dict({"image": data_valid})
-        dataset_valid_aug = Dataset.from_dict({"image": data_valid}).map(lambda x: augment(x))
+        dataset_train = Dataset.from_dict({"image": data_train}).with_format("torch").map(
+            lambda x: {"image": augment(x["image"])})
+        dataset_valid = Dataset.from_dict({"image": data_valid}).with_format("torch")
+        dataset_valid_aug = Dataset.from_dict({"image": data_valid}).with_format("torch").map(
+            lambda x: {"image": augment(x["image"])})
 
         return dataset_train, ValidationDatasetsDict(datasets=(
             dataset_train, dataset_valid, dataset_valid_aug), only_for_demo=(True, False, False),
@@ -84,9 +90,10 @@ class MyTrainingSession(TrainingBaseSession):
             def __init__(self, num_ch, num_layers):
                 super().__init__()
                 layers = []
-                for _ in range(num_layers):
-                    layers.append(torch.nn.Conv2d(num_ch, num_ch, 3))
-                    layers.append(torch.nn.ReLU())
+                for i in range(num_layers):
+                    layers.append(torch.nn.Conv2d(num_ch, num_ch, 3, padding=1))
+                    if i < num_layers - 1:
+                        layers.append(torch.nn.ReLU())
 
                 self.layers = torch.nn.Sequential(*layers)
 
@@ -114,7 +121,7 @@ class MyTrainingSession(TrainingBaseSession):
         output_image = self.network(input_image)
 
         return {"output": output_image, "target": target_image,
-                "gt_for_metrics": target_image.sigmoid().round(), "predictions_for_metrics": output_image.sigmoid()}
+                "gt_for_metrics": target_image, "predictions_for_metrics": output_image.sigmoid()}
 
     def loss_function(self, *, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
