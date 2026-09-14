@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Demonstrate testing the experimental setup with a user-facing `unittest` suite
+  for the image-reconstruction example, and include it in normal CI discovery.
 - Add a runnable version of the README's image-reconstruction example, with a
   start/resume interface and a walkthrough of validation, metrics and recovery.
   Test interrupted runs against uninterrupted training using the actual example.

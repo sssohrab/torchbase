@@ -18,6 +18,12 @@ from examples.image_reconstruction import MyTrainingSession, get_config, main
 from torchbase.utils.session import RandomnessGeneratorStates
 
 
+def load_tests(loader, tests, pattern):
+    # Include the user-facing suite in the repository's normal unittest discovery.
+    tests.addTests(loader.loadTestsFromName("examples.tests.test_image_reconstruction"))
+    return tests
+
+
 class ImageReconstructionExampleUnitTest(unittest.TestCase):
     def setUp(self):
         self.addCleanup(RandomnessGeneratorStates().apply)

@@ -143,14 +143,53 @@ with torch.no_grad():
     probabilities = network(image).sigmoid()
 ```
 
-## Tests
+## Testing your experimental setup
+
+It is a good idea to write unit tests for your ML experiments, particularly for
+the experimental setup that you intend to reuse. `torchbase` helps with this by
+separating the datasets, network, forward pass, loss and metrics into methods
+that you can exercise independently. You do not need to run a whole training
+experiment to find a wrong tensor shape or a detached loss.
+
+[tests/test_image_reconstruction.py](tests/test_image_reconstruction.py) shows
+how to do this with Python's standard `unittest`. Each test creates a small CPU
+session with controlled randomness and a temporary run directory. It closes the
+writer and restores random states afterwards. No new testing library is needed.
+
+Run it from the repository root:
+
+```sh
+uv run --locked python -m unittest examples.tests.test_image_reconstruction -v
+```
+
+The tests check dataset shapes, types and binary targets; which validation sets
+participate in model selection; the forward-pass outputs; loss values and gradient
+flow; metrics on handcrafted predictions; and one optimizer step with its progress
+and logging updates. These are tests of the setup's expected behavior, not a
+requirement to achieve a certain accuracy after training.
+
+When adapting the example, adapt these expectations too. A new dataset may need
+checks for label ranges and train/validation leakage. A different network may
+need checks on output dimensions, and a custom loss or metric should have a small
+case with a known answer. The binary-label and shape assertions here are specific
+to this example, not rules imposed by `torchbase` on every experiment.
+
+This is the same separation discussed in the main README: version-control and
+test the reusable experimental setup, while saving each run's configuration and
+results separately. Tests help establish that the implementation behaves as
+intended; they do not establish scientific validity or how well it generalizes.
+
+### End-to-end checks
+
+The focused suite above includes one single-iteration integration check. The
+repository also has longer tests for the complete run and checkpoint recovery:
 
 ```sh
 uv run --locked python -m unittest tests.test_readme tests.test_examples -b
 ```
 
-The tests run the README snippets and the runnable example. They also interrupt
-the example between checkpoint saves during training and evaluation, then compare
-its recovered state with an uninterrupted run. The interruption is injected by
+This command includes the focused suite above and runs the README snippets and
+the runnable example. The recovery tests interrupt training and evaluation between
+checkpoint saves, then compare the recovered state with an uninterrupted run. The interruption is injected by
 the tests; it is not a special mode in the example. CI runs these tests against
 the built wheel, keeping the examples outside the library package.
