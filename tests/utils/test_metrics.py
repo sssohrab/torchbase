@@ -168,6 +168,27 @@ class BaseMetricsClassUnitTest(unittest.TestCase):
         self.assertEqual(params["extras"].kind, inspect.Parameter.VAR_KEYWORD)
         self.assertEqual(function(a=2.0, bonus=3.0), 7.0)
 
+    def test_logger_forwards_extra_keywords_with_and_without_mapping(self):
+        for mapping, inputs in (({}, {"x": 2.0}), ({"a": "x"}, {"a": 2.0}),
+                                ({"a": "x", "b": "bonus"}, {"a": 2.0, "b": 3.0})):
+            with self.subTest(mapping=mapping):
+                logger = LoggableParams(OptionalMetrics(mapping).get_metrics(["with_extras"]))
+                if "b" not in inputs:
+                    inputs["bonus"] = 3.0
+                self.assertEqual(logger(**inputs), {"with_extras": 7.0})
+                self.assertEqual(logger(**inputs, scale=4.0), {"with_extras": 11.0})
+
+    def test_logger_forwards_kwargs_only_inputs(self):
+        def total(**values):
+            return float(sum(values.values()))
+
+        self.assertEqual(LoggableParams({"total": total})(x=1.0, y=2.0), {"total": 3.0})
+
+    def test_logger_rejects_alias_and_original_in_extra_keywords(self):
+        logger = LoggableParams(OptionalMetrics({"a": "x"}).get_metrics(["with_extras"]))
+        with self.assertRaisesRegex(TypeError, "multiple values.*x"):
+            logger(a=1.0, x=2.0)
+
     def test_mapped_extra_keywords_remain_visible_to_logger(self):
         function = OptionalMetrics({"a": "x", "b": "bonus"}).get_metrics(["with_extras"])["with_extras"]
         self.assertEqual(LoggableParams({"value": function})(a=2.0, b=3.0, scale=4.0), {"value": 11.0})

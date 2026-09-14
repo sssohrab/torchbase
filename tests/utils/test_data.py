@@ -40,6 +40,22 @@ class UnsizedIterable:
 
 
 class SplittingTests(unittest.TestCase):
+    def test_fractional_portions_preserve_every_sample_and_column(self):
+        for portions in ((0.1, 0.1, 0.6), (0.1, 0.1, 0.6, 0.0, 0.0), (0.0, 0.1, 0.0, 0.1, 0.6)):
+            for shuffle in (False, True):
+                with self.subTest(portions=portions, shuffle=shuffle):
+                    parts = split_iterables(range(10), portions, shuffle=shuffle)
+                    combined = [item for part in parts for item in part]
+                    self.assertEqual(sorted(combined) if shuffle else combined, list(range(10)))
+                    columns = split_iterables({"x": iter(range(10)), "y": (i + 10 for i in range(10))},
+                                              portions, shuffle=shuffle)
+                    pairs = [(x, y) for part in columns for x, y in zip(part["x"], part["y"])]
+                    self.assertEqual(sorted(pairs) if shuffle else pairs, [(i, i + 10) for i in range(10)])
+                    for portion, part, column in zip(portions, parts, columns):
+                        if portion == 0:
+                            self.assertEqual(part, [])
+                            self.assertEqual(column, {"x": [], "y": []})
+
 
     def setUp(self):
         self.data_list = ["sample{}".format(i) for i in range(10)]

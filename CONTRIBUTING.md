@@ -5,7 +5,7 @@ minimum version in `pyproject.toml`, then run from the repository root:
 
 ```sh
 uv sync --locked --group tooling
-uv run --locked --group tooling ruff check torchbase tests scripts
+uv run --locked --group tooling ruff check torchbase tests scripts examples
 uv run --locked coverage run -m unittest discover -s tests
 uv run --locked coverage report
 ```

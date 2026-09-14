@@ -32,6 +32,61 @@ def reference_score(name, truth, probabilities):
 
 
 class BinaryEpochMetricUnitTest(unittest.TestCase):
+    def test_unchanged_subclass_keeps_independent_builtin_accumulators(self):
+        class InheritedMetrics(BinaryClassificationMetrics):
+            pass
+
+        group = InheritedMetrics()
+        first = group.get_epoch_metrics(NAMES)
+        second = group.get_epoch_metrics(NAMES)
+        self.assertEqual(set(first), set(NAMES))
+        for name in NAMES:
+            first[name].update(binary_ground_truth=torch.tensor([0, 1]),
+                               prediction_probabilities=torch.tensor([0.6, 0.9]))
+            self.assertAlmostEqual(first[name].compute(), group.get_metrics([name])[name](
+                binary_ground_truth=torch.tensor([0, 1]), prediction_probabilities=torch.tensor([0.6, 0.9])))
+            self.assertTrue(math.isnan(second[name].compute()))
+
+    def test_custom_preprocessing_and_scoring_do_not_inherit_incorrect_accumulators(self):
+        class ThresholdMetrics(BinaryClassificationMetrics):
+            @staticmethod
+            def _round_predictions_for_point_based_metrics(probabilities):
+                return probabilities >= 0.8
+
+        class PreparedMetrics(BinaryClassificationMetrics):
+            @staticmethod
+            def _check_and_prepare_inputs(**inputs):
+                truth, probabilities = BinaryClassificationMetrics._check_and_prepare_inputs(**inputs)
+                return truth, (probabilities >= 0.8).astype(float)
+
+        class ScoringMetrics(BinaryClassificationMetrics):
+            def f1_score_micro(self, *, binary_ground_truth, prediction_probabilities):
+                return 1.0
+
+        for group in (ThresholdMetrics(), PreparedMetrics(), ScoringMetrics()):
+            with self.subTest(group=type(group).__name__):
+                self.assertEqual(group.f1_score_micro(binary_ground_truth=torch.tensor([0, 1]),
+                                                     prediction_probabilities=torch.tensor([0.6, 0.9])), 1.0)
+                self.assertNotIn("f1_score_micro", group.get_epoch_metrics(NAMES))
+        self.assertEqual(ThresholdMetrics().get_epoch_metrics(NAMES), {})
+        self.assertEqual(PreparedMetrics().get_epoch_metrics(NAMES), {})
+        self.assertEqual(set(ScoringMetrics().get_epoch_metrics(NAMES)), set(NAMES) - {"f1_score_micro"})
+
+    def test_subclass_can_explicitly_supply_its_own_accumulator(self):
+        class CustomMetrics(BinaryClassificationMetrics):
+            @staticmethod
+            def f1_score_micro(*, value, scale=2.0):
+                return value.sum().item() * scale
+
+            def get_epoch_metric(self, name):
+                return SumMetric() if name == "f1_score_micro" else super().get_epoch_metric(name)
+
+        group = CustomMetrics({"output": "value"})
+        accumulator = group.get_epoch_metrics(["f1_score_micro"])["f1_score_micro"]
+        accumulator.update(output=torch.tensor([1.0, 2.0]))
+        self.assertEqual(accumulator.compute(), 6.0)
+        self.assertIsNotNone(group.get_epoch_metric("precision_micro"))
+
     def test_uneven_batches_match_whole_dataset_reference_not_batch_averages(self):
         truth = torch.tensor([0, 1, 1, 0, 1])
         probabilities = torch.tensor([0.1, 0.6, 0.2, 0.7, 0.8])
@@ -140,7 +195,37 @@ class SumMetrics(BaseMetricsClass):
         return SumMetric()
 
 
+class ExtraSumMetric(SumMetric):
+    def update(self, *, value, scale=2.0, **extras):
+        super().update(value=value, scale=scale)
+        self.total += extras["bonus"]
+
+
+class KwargsSumMetric(SumMetric):
+    def update(self, **inputs):
+        super().update(value=inputs["value"], scale=inputs.get("scale", 2.0))
+        self.total += inputs["bonus"]
+
+
 class EpochMetricContractUnitTest(unittest.TestCase):
+    def test_epoch_updates_receive_extra_and_mapped_keywords(self):
+        for metric_class in (ExtraSumMetric, KwargsSumMetric):
+            for mapping, inputs in (({}, {"value": torch.tensor([1.0]), "bonus": 3.0}),
+                                    ({"prediction": "value"}, {"prediction": torch.tensor([1.0]), "bonus": 3.0}),
+                                    ({"prediction": "value", "extra": "bonus"},
+                                     {"prediction": torch.tensor([1.0]), "extra": 3.0})):
+                with self.subTest(metric_class=metric_class.__name__, mapping=mapping):
+                    with patch.object(SumMetrics, "get_epoch_metric", return_value=metric_class()):
+                        accumulators = SumMetrics(mapping).get_epoch_metrics(["score"])
+                    progress = ProgressManager()
+                    logger = ValuesLogger(["score"], progress, accumulators)
+                    progress.increment_iter(1)
+                    logger.update({"score": 0.0}, metric_inputs=inputs)
+                    self.assertEqual(logger.epoch_values, {"score": 5.0})
+                    progress.increment_iter(1)
+                    logger.update({"score": 0.0}, metric_inputs={**inputs, "scale": 4.0})
+                    self.assertEqual(logger.epoch_values, {"score": 12.0})
+
     def make_logger(self):
         return ValuesLogger(["score"], ProgressManager(),
                             SumMetrics({"prediction": "value"}).get_epoch_metrics(["score"]))

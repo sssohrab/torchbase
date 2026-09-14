@@ -33,15 +33,15 @@ def _split_iterable(iterable_input: Iterable[Any], portions: Tuple[float, ...], 
     if sum_portions == 0:
         raise ValueError("Sum of portions must be greater than 0.")
 
-    portions = [_p / sum_portions for _p in portions]
-
     list_input = _iterable_to_list(iterable_input)
 
     if shuffle:
         random.shuffle(list_input)
 
     num_all = len(list_input)
-    split_indices = [int(sum(portions[:i + 1]) * num_all) for i in range(len(portions))]
+    # Normalize cumulative weights so the final boundary is exactly num_all,
+    # including when zero-sized portions follow the last nonempty split.
+    split_indices = [int(sum(portions[:i + 1]) / sum_portions * num_all) for i in range(len(portions))]
 
     splits = []
     start_idx = 0

@@ -29,6 +29,10 @@ which arguments it requires and whether or not you would like to log certain val
 
 This may look something like:
 
+The example reconstructs binary images and uses `torchvision` for augmentation (`pip install torchvision`).
+See [the runnable version and its walkthrough](https://github.com/sssohrab/torchbase/blob/main/examples/README.md)
+for starting, inspecting and recovering a run.
+
 ```python
 from torchbase import TrainingBaseSession
 from torchbase.utils import ValidationDatasetsDict, BaseMetricsClass, split_iterables
@@ -47,7 +51,7 @@ class MyTrainingSession(TrainingBaseSession):
         Here you define and return your training dataset, as well as validation datasets. 
         They all should be instances of the Huggingface's dataset library, i.e., `datasets.Dataset` objects.
         
-        The validation datasets should be wrapped around a `torchbase.ValidationDatasetsDict` object. This forces
+        The validation datasets should be wrapped around a `torchbase.utils.ValidationDatasetsDict` object. This forces
         you to do some extra work, but having multiple validation datasets can be very useful, e.g., to monitor 
         the effect of data augmentation. 
         Provide at least one nonempty validation dataset, with equally sized tuples of datasets, demo flags and
@@ -67,13 +71,17 @@ class MyTrainingSession(TrainingBaseSession):
             from torchvision.transforms import RandomRotation
             return RandomRotation(degrees=(-10, 10))(image)
 
-        data_train, data_valid = split_iterables([torch.randn((self.config_data["image_size"])) for _ in range(20)],
+        data_train, data_valid = split_iterables([torch.rand((self.config_network["num_ch"],
+                                                             *self.config_data["image_size"])).round()
+                                                 for _ in range(20)],
                                                  portions=tuple(self.config_data["split_portions"]),
                                                  shuffle=True)
 
-        dataset_train = Dataset.from_dict({"image": data_train}).map(lambda x: augment(x))
-        dataset_valid = Dataset.from_dict({"image": data_valid})
-        dataset_valid_aug = Dataset.from_dict({"image": data_valid}).map(lambda x: augment(x))
+        dataset_train = Dataset.from_dict({"image": data_train}).with_format("torch").map(
+            lambda x: {"image": augment(x["image"])})
+        dataset_valid = Dataset.from_dict({"image": data_valid}).with_format("torch")
+        dataset_valid_aug = Dataset.from_dict({"image": data_valid}).with_format("torch").map(
+            lambda x: {"image": augment(x["image"])})
 
         return dataset_train, ValidationDatasetsDict(datasets=(
             dataset_train, dataset_valid, dataset_valid_aug), only_for_demo=(True, False, False),
@@ -84,9 +92,10 @@ class MyTrainingSession(TrainingBaseSession):
             def __init__(self, num_ch, num_layers):
                 super().__init__()
                 layers = []
-                for _ in range(num_layers):
-                    layers.append(torch.nn.Conv2d(num_ch, num_ch, 3))
-                    layers.append(torch.nn.ReLU())
+                for i in range(num_layers):
+                    layers.append(torch.nn.Conv2d(num_ch, num_ch, 3, padding=1))
+                    if i < num_layers - 1:
+                        layers.append(torch.nn.ReLU())
 
                 self.layers = torch.nn.Sequential(*layers)
 
@@ -114,7 +123,7 @@ class MyTrainingSession(TrainingBaseSession):
         output_image = self.network(input_image)
 
         return {"output": output_image, "target": target_image,
-                "gt_for_metrics": target_image.sigmoid().round(), "predictions_for_metrics": output_image.sigmoid()}
+                "gt_for_metrics": target_image, "predictions_for_metrics": output_image.sigmoid()}
 
     def loss_function(self, *, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
@@ -245,7 +254,7 @@ Iteration metrics describe each mini-batch. At epoch completion, their sample-we
 `batch_means`, not as whole-dataset scores. Binary precision, recall and F1 also have `epochs` scores computed from four accumulated
 confusion counts, independently for training and each validation dataset. Other metrics, including AUC and PSNR,
 remain batch statistics; no predictions are buffered. `loss/epochs` remains the sample-weighted mean of batch losses
-and assumes a mean-reduced loss. Update any custom TensorBoard layouts accordingly when moving from v0.1.x.
+and assumes a mean-reduced loss.
 
 For a custom whole-epoch metric, override `BaseMetricsClass.get_epoch_metric(name)` to return a fresh `EpochMetric`
 with keyword-only `update`, `compute`, `reset`, `state_dict` and `load_state_dict` methods. Its state is checkpointed
@@ -307,12 +316,11 @@ improve their records in the same epoch; `only_for_demo` datasets do not vote. T
 recorded separately as `best_model_epoch` (zero-based, like the loss records). The checkpoint may therefore contain
 two sets of weights when the latest and best models differ.
 
-v0.2.x uses a single checkpoint structure, with no backward compatibility or migration support for earlier versions.
 Recovery requires all states expected by the current code; missing or inconsistent states raise an error.
 
 Alternatively, passing the flag `create_run_dir_afresh=True`, but still specifying a `source_run_dir_tag` will create a
 new experiment starting from scratch but only initializing the weights of the network with the previously-trained ones
-from the source run's latest v0.2.x checkpoint. In this case, you are starting a new experiment rather than continuing
+from the source run's latest checkpoint. In this case, you are starting a new experiment rather than continuing
 the old one: the optimizer, progress counters, logged values and best-loss tracking start afresh, and the source run's
 randomness and dataloader states are not restored.
 
@@ -331,8 +339,8 @@ class MyTrainingSession(TrainingBaseSession):
         pass
 ```
 
-Currently, the `torchbase` project has no documentation other than this readme. The best way to learn about its
-different features is to look at the unit-tests, or just looking at the source code.
+For a longer walkthrough, see the [runnable example](https://github.com/sssohrab/torchbase/blob/main/examples/README.md).
+The unit-tests and source code provide further details about the different features.
 
 ## The idea behind
 

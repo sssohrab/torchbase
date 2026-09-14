@@ -2,10 +2,12 @@
 
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import torch
 
 from tests.test_session_resume import ResumeSession
+from torchbase.session import TrainingBaseSession
 from torchbase.utils.metrics import BaseMetricsClass
 from torchbase.utils.session import RandomnessGeneratorStates
 
@@ -32,7 +34,59 @@ class MetricSession(ResumeSession):
         return outputs
 
 
+class ExtraLossSession(MetricSession):
+    def loss_function(self, *, output, **extras):
+        return (output - extras["target"]).square().mean() * extras["unrelated"]
+
+
+class KwargsLossSession(MetricSession):
+    def loss_function(self, **outputs):
+        return (outputs["output"] - outputs["target"]).square().mean() * outputs["unrelated"]
+
+
+class LossMetrics(BaseMetricsClass):
+    @staticmethod
+    def loss(*, output):
+        return 123.0
+
+
 class SessionMetricMappingUnitTest(unittest.TestCase):
+    def test_metric_registration_rejects_reserved_and_unknown_names(self):
+        for group, name, message in ((LossMetrics(), "loss", "loss.*reserved"),
+                                     (IterationMetrics(), "missing", "missing.*IterationMetrics")):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
+                owner = SimpleNamespace(config_metrics={type(group).__name__: [name]})
+                TrainingBaseSession.get_metrics_functionals_dict_from_metrics_classes(owner, [group])
+
+    def test_duplicate_metric_names_across_groups_are_still_rejected(self):
+        class OtherMetrics(IterationMetrics):
+            pass
+
+        owner = SimpleNamespace(config_metrics={"IterationMetrics": ["error"], "OtherMetrics": ["error"]})
+        with self.assertRaisesRegex(ValueError, "Duplicate keys"):
+            TrainingBaseSession.get_metrics_functionals_dict_from_metrics_classes(
+                owner, [IterationMetrics(), OtherMetrics()])
+
+    def test_loss_receives_extra_outputs_in_training_and_validation(self):
+        self.addCleanup(RandomnessGeneratorStates().apply)
+        with tempfile.TemporaryDirectory() as storage:
+            for session_class in (ExtraLossSession, KwargsLossSession):
+                with self.subTest(session_class=session_class.__name__):
+                    config = ResumeSession.get_config(num_epochs=1)
+                    config["data"] = {"keyword_maps": {"output": "prediction"}}
+                    config["metrics"] = {"IterationMetrics": ["error"]}
+                    session = session_class(config, runs_parent_dir=storage, tag_postfix=session_class.__name__)
+                    try:
+                        batch = next(iter(session.dataloader_train))
+                        session.do_one_training_iteration(batch)
+                        self.assertEqual(session.value_logger_train.current_values["loss"],
+                                         session.loss_function(**session.last_outputs).item())
+                        session.do_one_validation_iteration(batch, "valid")
+                        self.assertEqual(session.value_logger_valid_dict["valid"].current_values["loss"],
+                                         session.loss_function(**session.last_outputs).item())
+                    finally:
+                        session.writer.close()
+
     def test_partial_and_complete_mappings_during_training_and_validation(self):
         self.addCleanup(RandomnessGeneratorStates().apply)
         storage = tempfile.TemporaryDirectory()

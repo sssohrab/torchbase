@@ -32,7 +32,7 @@ jobs:
           python-version: "3.13"
           enable-cache: true
       - run: uv sync --locked --only-group tooling
-      - run: uv run --no-sync ruff check torchbase tests scripts
+      - run: uv run --no-sync ruff check torchbase tests scripts examples
       # By default uv builds the wheel from the sdist, checking both build paths.
       - run: uv build --out-dir wheelhouse
       - name: Check distributions and release tag
@@ -93,6 +93,8 @@ jobs:
         run: |
           test_dir="$(mktemp -d)"
           cp -R tests "$test_dir/tests"
+          cp -R examples "$test_dir/examples"
+          cp README.md "$test_dir/README.md"
           cd "$test_dir"
           "$GITHUB_WORKSPACE/.venv/bin/python" -m coverage run --parallel-mode \
             --rcfile="$GITHUB_WORKSPACE/pyproject.toml" -m unittest discover -s tests -b
