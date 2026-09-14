@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a runnable version of the README's image-reconstruction example, with a
+  start/resume interface and a walkthrough of validation, metrics and recovery.
+  Test interrupted runs against uninterrupted training using the actual example.
 - Preserve every sample when splitting with fractional portions, including aligned
   dictionary columns and trailing zero-sized splits.
 - Pass extra keyword arguments to losses, batch metrics and epoch accumulators
