@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-14
 
 - Demonstrate testing the experimental setup with a user-facing `unittest` suite
   for the image-reconstruction example, and include it in normal CI discovery.
